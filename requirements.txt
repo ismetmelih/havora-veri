@@ -1,0 +1,3 @@
+eccodes==2.50.0
+eccodeslib==2.43.0
+numpy==2.0.2
