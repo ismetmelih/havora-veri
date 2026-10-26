@@ -1,11 +1,15 @@
 """HAVORA model haritaları için veri üretici.
 
 GFS (NOAA), ECMWF (açık veri) ve ICON-EU (DWD) modellerinin ham GRIB2 çıktılarını indirir,
-Türkiye ve çevresini (30–46°K, 18–50°D, 0,25°) keser ve sitenin okuyacağı küçük dosyalara çevirir.
+iki bölgeyi keser ve sitenin okuyacağı küçük dosyalara çevirir:
+  tr: Türkiye ve çevresi (30–46°K, 18–50°D, 0,25°, 3 saatte bir)
+  eu: Avrupa, Atlantik ve Kuzey Afrika (20–72°K, 50°B–70°D, 0,5°, 6 saatte bir) — sistemlerin gelişini görmek için
+  world: bütün dünya (80°G–80°K, 1°, 6 saatte bir)
 
-Çıktı: out/<model>/meta.json ve out/<model>/<alan>.bin.gz
-  .bin.gz: gzip'li, adım adım art arda dizilmiş int16 (little-endian) ızgaralar; değer = ham * scale
-  eksik değer: -32768
+Çıktı: out/<model>/meta.json ve out/<model>/<alan>.<bölge>.bin.gz
+  .bin.gz: gzip'li, adım adım art arda dizilmiş int16 ızgaralar; değer = ham * scale, eksik değer: -32768.
+  Daha iyi sıkışsın diye her satır soldan farklarla (16 bit taşmalı) yazılır, sonra baytlar
+  ayrılır: önce bütün düşük baytlar, ardından bütün yüksek baytlar.
 
 Kullanım: python uret.py [gfs ecmwf icon] [--steps 0,3,6]  (adım verilmezse tamamı)
 Yalnızca herkese açık veriler kullanılır; hiçbir anahtar ya da gizli bilgi gerekmez.
@@ -26,11 +30,26 @@ import numpy as np
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'out')
 
-# Hedef ızgara: kuzeyden güneye, batıdan doğuya
-LAT_N, LAT_S, LON_W, LON_E, STEP = 46.0, 30.0, 18.0, 50.0, 0.25
-LATS = np.round(np.arange(LAT_N, LAT_S - 1e-6, -STEP), 2)
-LONS = np.round(np.arange(LON_W, LON_E + 1e-6, STEP), 2)
-NY, NX = len(LATS), len(LONS)
+# Hedef ızgaralar: kuzeyden güneye, batıdan doğuya. every: kaç saatte bir adım yazılır
+REGIONS = {
+    'tr': {'latN': 46.0, 'latS': 30.0, 'lonW': 18.0, 'lonE': 50.0, 'step': 0.25, 'every': 3},
+    'eu': {'latN': 72.0, 'latS': 20.0, 'lonW': -50.0, 'lonE': 70.0, 'step': 0.5, 'every': 6},
+    'world': {'latN': 80.0, 'latS': -80.0, 'lonW': -180.0, 'lonE': 179.0, 'step': 1.0, 'every': 6},
+}
+# Bölgelerin noktaları tek bir düz dizide art arda tutulur; böylece birikmiş yağış gibi
+# hesaplar iki bölge için aynı anda yapılır, write() en sonda bölgelere ayırır.
+NPTS = 0
+for _r in REGIONS.values():
+    _r['lats'] = np.round(np.arange(_r['latN'], _r['latS'] - 1e-6, -_r['step']), 2)
+    _r['lons'] = np.round(np.arange(_r['lonW'], _r['lonE'] + 1e-6, _r['step']), 2)
+    _r['ny'], _r['nx'] = len(_r['lats']), len(_r['lons'])
+    _r['off'] = NPTS
+    NPTS += _r['ny'] * _r['nx']
+# İndirilecek alan: bölgelerin hepsini kapsayan kutu
+BOX_N = max(r['latN'] for r in REGIONS.values())
+BOX_S = min(r['latS'] for r in REGIONS.values())
+BOX_W = min(r['lonW'] for r in REGIONS.values())
+BOX_E = max(r['lonE'] for r in REGIONS.values())
 
 # Alanlar: ad -> (birim, ölçek). Değerler int16 olarak ham/ölçek şeklinde saklanır.
 FIELDS = {
@@ -73,7 +92,7 @@ def exists(url):
 
 
 def messages(data):
-    """GRIB2 baytlarından (kısa ad, seviye türü, seviye, 2B dizi, enlemler, boylamlar) üret."""
+    """GRIB2 baytlarından (kısa ad, seviye türü, seviye, 2B dizi, enlemler, boylamlar, birikim başlangıcı) üret."""
     with tempfile.NamedTemporaryFile(suffix='.grb2', delete=False) as tmp:
         tmp.write(data)
         path = tmp.name
@@ -86,17 +105,13 @@ def messages(data):
                 try:
                     ni, nj = eccodes.codes_get(h, 'Ni'), eccodes.codes_get(h, 'Nj')
                     vals = eccodes.codes_get_values(h).reshape(nj, ni)
-                    lats = np.round(eccodes.codes_get_array(h, 'distinctLatitudes'), 4)
-                    lons = np.round(eccodes.codes_get_array(h, 'distinctLongitudes'), 4)
-                    # dağıtılan sıra ile değer sırası aynı olsun
-                    if eccodes.codes_get(h, 'jScansPositively') == 0:
-                        lats = lats[::-1] if lats[0] < lats[-1] else lats
-                    elif lats[0] > lats[-1]:
-                        lats = lats[::-1]
+                    # değerlerle aynı sırada (0° boylamını aşan kesitlerde de doğru)
+                    lats = np.round(eccodes.codes_get_array(h, 'latitudes').reshape(nj, ni)[:, 0], 4)
+                    lons = np.round(eccodes.codes_get_array(h, 'longitudes').reshape(nj, ni)[0, :], 4)
                     missing = eccodes.codes_get(h, 'missingValue')
                     vals = np.where(vals == missing, np.nan, vals)
                     yield (eccodes.codes_get(h, 'shortName'), eccodes.codes_get(h, 'typeOfLevel'),
-                           eccodes.codes_get(h, 'level'), vals, lats, lons)
+                           eccodes.codes_get(h, 'level'), vals, lats, lons, eccodes.codes_get(h, 'startStep'))
                 finally:
                     eccodes.codes_release(h)
     finally:
@@ -104,13 +119,23 @@ def messages(data):
 
 
 def subset(vals, lats, lons):
-    """Kaynak ızgaradan hedef ızgarayı (LATS x LONS) seç."""
+    """Kaynak ızgaradan bütün bölgelerin noktalarını seç → NPTS uzunlukta düz dizi.
+    Kaynağın kapsamadığı noktalar (ör. ICON-EU'nun dışı) NaN olur."""
     lons = np.where(lons > 180, lons - 360, lons)
-    yi = np.array([np.argmin(np.abs(lats - la)) for la in LATS])
-    xi = np.array([np.argmin(np.abs(lons - lo)) for lo in LONS])
-    if np.abs(lats[yi] - LATS).max() > 0.01 or np.abs(lons[xi] - LONS).max() > 0.01:
-        raise ValueError('kaynak ızgara hedef ızgarayla hizalı değil')
-    return vals[np.ix_(yi, xi)]
+    parts = []
+    for r in REGIONS.values():
+        yi = np.array([np.argmin(np.abs(lats - la)) for la in r['lats']])
+        xi = np.array([np.argmin(np.abs(lons - lo)) for lo in r['lons']])
+        dy, dx = np.abs(lats[yi] - r['lats']), np.abs(lons[xi] - r['lons'])
+        inside_y = (r['lats'] >= lats.min() - 0.01) & (r['lats'] <= lats.max() + 0.01)
+        inside_x = (r['lons'] >= lons.min() - 0.01) & (r['lons'] <= lons.max() + 0.01)
+        if (dy[inside_y] > 0.01).any() or (dx[inside_x] > 0.01).any():
+            raise ValueError('kaynak ızgara hedef ızgarayla hizalı değil')
+        a = vals[np.ix_(yi, xi)].astype(float)
+        a[~inside_y, :] = np.nan
+        a[:, ~inside_x] = np.nan
+        parts.append(a.ravel())
+    return np.concatenate(parts)
 
 
 def cumulative_to_6h(steps, cum):
@@ -124,32 +149,40 @@ def cumulative_to_6h(steps, cum):
     return out
 
 
-def write(model, run, steps, fields, extra=None):
+def write(model, run, steps, fields, extra=None, regions=tuple(REGIONS)):
     d = os.path.join(OUT, model)
     os.makedirs(d, exist_ok=True)
     meta = {
         'model': model, 'run': run.strftime('%Y-%m-%dT%H:00Z'), 'generated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ'),
-        'grid': {'latN': LAT_N, 'lonW': LON_W, 'step': STEP, 'ny': NY, 'nx': NX},
-        'steps': steps, 'fields': {}, **(extra or {}),
+        'encoding': 'row-delta+byte-split', 'regions': {}, 'fields': {}, **(extra or {}),
     }
-    for name, (unit, scale) in FIELDS.items():
-        if name not in fields:
-            continue
-        buf = np.full((len(steps), NY, NX), -32768, dtype='<i2')
-        have = 0
-        for i, s in enumerate(steps):
-            a = fields[name].get(s)
-            if a is None:
+    for key in regions:
+        r = REGIONS[key]
+        rsteps = [s for s in steps if s % r['every'] == 0]
+        meta['regions'][key] = {'latN': r['latN'], 'lonW': r['lonW'], 'step': r['step'], 'ny': r['ny'], 'nx': r['nx'], 'steps': rsteps}
+        n = r['ny'] * r['nx']
+        for name, (unit, scale) in FIELDS.items():
+            if name not in fields:
                 continue
-            q = np.round(a / scale)
-            q = np.where(np.isfinite(q), np.clip(q, -32767, 32767), -32768)
-            buf[i] = q.astype('<i2')
-            have += 1
-        if not have:
-            continue
-        with gzip.open(os.path.join(d, f'{name}.bin.gz'), 'wb', compresslevel=9) as f:
-            f.write(buf.tobytes())
-        meta['fields'][name] = {'unit': unit, 'scale': scale}
+            buf = np.full((len(rsteps), n), -32768, dtype='<i2')
+            have = 0
+            for i, s in enumerate(rsteps):
+                a = fields[name].get(s)
+                if a is None:
+                    continue
+                q = np.round(a[r['off']:r['off'] + n] / scale)
+                q = np.where(np.isfinite(q), np.clip(q, -32767, 32767), -32768)
+                buf[i] = q.astype('<i2')
+                have += 1
+            if not have:
+                continue
+            u = buf.view('<u2').reshape(len(rsteps), r['ny'], r['nx'])
+            diff = u.copy()
+            diff[:, :, 1:] = u[:, :, 1:] - u[:, :, :-1]  # uint16: taşma sarar, geri dönüşte birebir aynı
+            packed = diff.astype('<u2').view(np.uint8).reshape(-1, 2).T.tobytes()
+            with gzip.open(os.path.join(d, f'{name}.{key}.bin.gz'), 'wb', compresslevel=9) as f:
+                f.write(packed)
+            meta['fields'][name] = {'unit': unit, 'scale': scale}
     with open(os.path.join(d, 'meta.json'), 'w', encoding='utf-8') as f:
         json.dump(meta, f, ensure_ascii=False)
     log(model, run, len(steps), 'adım,', ', '.join(meta['fields']), 'yazıldı')
@@ -198,9 +231,9 @@ def gfs(steps_filter=None):
         q = (f'dir=%2Fgfs.{run:%Y%m%d}%2F{run:%H}%2Fatmos&file=gfs.t{run:%H}z.pgrb2.0p25.f{s:03d}'
              '&var_TMP=on&var_HGT=on&var_PRMSL=on&var_APCP=on&var_CSNOW=on&var_GUST=on'
              '&lev_850_mb=on&lev_500_mb=on&lev_mean_sea_level=on&lev_surface=on&lev_2_m_above_ground=on'
-             f'&subregion=&toplat={LAT_N}&leftlon={LON_W}&rightlon={LON_E}&bottomlat={LAT_S}')
+             f'&subregion=&toplat={BOX_N}&leftlon={BOX_W}&rightlon={BOX_E}&bottomlat={BOX_S}')
         data = get(f'{base}/cgi-bin/filter_gfs_0p25.pl?{q}')
-        for name, ltype, lev, vals, lats, lons in messages(data):
+        for name, ltype, lev, vals, lats, lons, start in messages(data):
             a = subset(vals, lats, lons)
             if name == 't' and lev == 850 and ltype == 'isobaricInhPa':
                 f['t850'][s] = a - 273.15
@@ -214,27 +247,19 @@ def gfs(steps_filter=None):
                 f['t2m'][s] = a - 273.15
             elif name == 'gust':
                 f['gust'][s] = a * 3.6
-            elif name == 'tp':
-                apcp[s] = a
+            elif name == 'tp' and start == 0:
+                apcp[s] = a  # koşu başından beri toplam (dosyada bir de 6 saatlik kova var, o atlanır)
             elif name == 'csnow':
                 csnow[s] = a
         time.sleep(0.6)  # NOMADS'a nazik ol (dakikada en fazla ~120 istek)
-    # GFS yağışı 6 saatlik kovalarda birikir ve her 6 saatte sıfırlanır:
-    #   f%6==3 → kova başından 3 saatlik toplam; f%6==0 → 6 saatlik kovanın tamamı.
-    # Adım adım "önceki adımdan bu yana" yağışı bul, başlangıçtan beri birikmişe çevir.
-    zero = np.zeros((NY, NX))
+    zero = np.zeros(NPTS)
     cum, cum_snow, prev = {0: zero}, {0: zero}, 0
     for s in sorted(steps)[1:]:
         if s not in apcp or prev not in cum:
             continue
-        if s % 6 == 0 and s - prev == 3:
-            part = apcp[s] - apcp[prev]   # 6 saatlik kova eksi ilk 3 saati
-        else:
-            part = apcp[s]                # kova başından bu yana (3 ya da 6 saat)
-        part = np.maximum(part, 0)
-        cum[s] = cum[prev] + part
-        # Kar: o aralıktaki yağışı, adım anındaki "kar yağıyor" bayrağıyla say (yaklaşık)
-        cum_snow[s] = cum_snow[prev] + part * csnow.get(s, 0)
+        cum[s] = apcp[s]
+        # Kar: önceki adımdan bu yana yağışı, adım anındaki "kar yağıyor" bayrağıyla say (yaklaşık)
+        cum_snow[s] = cum_snow[prev] + np.maximum(apcp[s] - cum[prev], 0) * csnow.get(s, 0)
         prev = s
     f['pr6'] = cumulative_to_6h(steps, cum)
     f['sn6'] = cumulative_to_6h(steps, cum_snow)
@@ -268,7 +293,7 @@ def ecmwf(steps_filter=None):
             req = urllib.request.Request(f'{stem}.grib2', headers={**UA, 'Range': f"bytes={r['_offset']}-{r['_offset'] + r['_length'] - 1}"})
             with urllib.request.urlopen(req, timeout=120) as resp:
                 chunks.append(resp.read())
-        for name, ltype, lev, vals, lats, lons in messages(b''.join(chunks)):
+        for name, ltype, lev, vals, lats, lons, _ in messages(b''.join(chunks)):
             a = subset(vals, lats, lons)
             if name == 't' and lev == 850:
                 f['t850'][s] = a - 273.15
@@ -286,8 +311,8 @@ def ecmwf(steps_filter=None):
                 tp[s] = a * 1000          # m → mm
             elif name == 'sf':
                 sf[s] = a * 1000          # m su eşdeğeri → mm ≈ cm kar (10:1)
-    tp.setdefault(0, np.zeros((NY, NX)))
-    sf.setdefault(0, np.zeros((NY, NX)))
+    tp.setdefault(0, np.zeros(NPTS))
+    sf.setdefault(0, np.zeros(NPTS))
     f['pr6'] = cumulative_to_6h(steps, tp)
     f['sn6'] = cumulative_to_6h(steps, sf)
     write('ecmwf', run, steps, f, {'name': 'ECMWF', 'source': 'ECMWF açık veri (CC BY 4.0)', 'resolution': '0,25°'})
@@ -315,7 +340,7 @@ def icon(steps_filter=None):
         kind = 'pressure-level' if level else 'single-level'
         lv = f'_{level}' if level else ''
         url = f'{base}/{run:%H}/{var.lower()}/icon-eu_europe_regular-lat-lon_{kind}_{r}_{s:03d}{lv}_{var.upper()}.grib2.bz2'
-        for _, _, _, vals, lats, lons in messages(bz2.decompress(get(url))):
+        for _, _, _, vals, lats, lons, _ in messages(bz2.decompress(get(url))):
             return subset(vals, lats, lons)
         return None
 
@@ -332,11 +357,24 @@ def icon(steps_filter=None):
             f['gust'][s] = grab('vmax_10m', s) * 3.6
             prec[s] = grab('tot_prec', s)
             snow[s] = grab('snow_gsp', s) + grab('snow_con', s)
-    prec[0] = np.zeros((NY, NX))
-    snow[0] = np.zeros((NY, NX))
+    prec[0] = np.zeros(NPTS)
+    snow[0] = np.zeros(NPTS)
     f['pr6'] = cumulative_to_6h(steps, prec)
     f['sn6'] = cumulative_to_6h(steps, snow)
-    write('icon', run, steps, f, {'name': 'ICON', 'source': 'DWD açık veri', 'resolution': '0,0625° → 0,25°'})
+    write('icon', run, steps, f, {'name': 'ICON', 'source': 'DWD açık veri', 'resolution': '0,0625° → 0,25°', 'coverage': '29,5–70,5°K, 23,5°B–62,5°D'}, regions=('tr', 'eu'))  # ICON-EU dünyayı kapsamaz
+
+
+def write_index():
+    models_meta = {}
+    for m in ('gfs', 'ecmwf', 'icon'):
+        try:
+            with open(os.path.join(OUT, m, 'meta.json'), encoding='utf-8') as mf:
+                mm = json.load(mf)
+            models_meta[m] = {'run': mm['run'], 'generated': mm['generated'], 'hours': mm['regions']['tr']['steps'][-1], 'regions': list(mm['regions'])}
+        except Exception:  # noqa: BLE001
+            pass
+    with open(os.path.join(OUT, 'index.json'), 'w', encoding='utf-8') as fh:
+        json.dump({'updated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ'), 'models': models_meta}, fh, ensure_ascii=False)
 
 
 def main():
@@ -354,16 +392,7 @@ def main():
         except Exception as e:  # noqa: BLE001 — bir model hata verirse diğerleri yine üretilsin
             log(m, 'HATA', repr(e))
             failed.append(m)
-    with open(os.path.join(OUT, 'index.json'), 'w', encoding='utf-8') as fh:
-        models_meta = {}
-        for m in ('gfs', 'ecmwf', 'icon'):
-            try:
-                with open(os.path.join(OUT, m, 'meta.json'), encoding='utf-8') as mf:
-                    mm = json.load(mf)
-                models_meta[m] = {'run': mm['run'], 'generated': mm['generated'], 'steps': len(mm['steps'])}
-            except Exception:  # noqa: BLE001
-                pass
-        json.dump({'updated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ'), 'models': models_meta}, fh, ensure_ascii=False)
+        write_index()  # her modelden sonra: biten modeller hemen görünsün
     if failed and len(failed) == len(models):
         sys.exit(1)
 
