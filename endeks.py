@@ -26,8 +26,12 @@ MJO_URL = 'https://psl.noaa.gov/mjo/mjoindex/romi.cpcolr.1x.txt'
 QBO_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/qbo.{}.index'
 ONI_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt'
 NINO_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for'
-NAMES = ('ao', 'nao', 'pna', 'aao', 'mjo', 'qbo', 'enso')
-FORMAT = 2   # çıktı biçimi değişince artır: eski dosya beklemeden yeniden üretilir
+NAMES = ('ao', 'nao', 'pna', 'aao', 'mjo', 'qbo', 'enso', 'tele', 'snow', 'ice')
+FORMAT = 3   # çıktı biçimi değişince artır: eski dosya beklemeden yeniden üretilir
+TELE_URL = 'https://ftp.cpc.ncep.noaa.gov/wd52dg/data/indices/tele_index.nh'
+SNOW_URL = 'https://climate.rutgers.edu/snowcover/files/wkcov.{}.txt'
+ICE_URL = 'https://noaadata.apps.nsidc.org/NOAA/G02135/north/daily/data/N_seaice_extent_daily_v4.0.csv'
+ICE_CLIM = 'https://noaadata.apps.nsidc.org/NOAA/G02135/north/daily/data/N_seaice_extent_climatology_1981-2010_v4.0.csv'
 EVERY_H = 1   # NOAA günde bir kez (~14:00 UTC) günceller; saatte bir bakınca en geç 1 saatte gelir
 
 
@@ -146,6 +150,62 @@ def enso(get):
     return {'oni': oni[-96:], 'nino34': weekly[-104:], 'source_time': last_modified(NINO_URL)}
 
 
+def tele(get):
+    """NOAA CPC aylık göstergeler: Türkiye kışında etkili EA/WR, SCAND (SCA) ve EA; son 6 yıl"""
+    cols = ['nao', 'ea', 'wp', 'epnp', 'pna', 'eawr', 'scand', 'tnh', 'pol', 'pt']
+    out = {k: [] for k in ('ea', 'eawr', 'scand')}
+    for line in get(TELE_URL).decode('latin-1').splitlines():
+        p = line.split()
+        if len(p) < 3 or not p[0].isdigit() or len(p[0]) != 4:
+            continue
+        nums = re.findall(r'-?\d+\.\d+', line[8:])   # eksik değerler bitişik yazılabiliyor (-0.71-99.90)
+        if len(nums) < 10:
+            continue
+        date = f'{int(p[0]):04d}-{int(p[1]):02d}-15'
+        for k in out:
+            v = float(nums[cols.index(k)])
+            out[k].append((date, None if v <= -99 else v))
+    out = {k: v[-72:] for k, v in out.items()}
+    out['source_time'] = last_modified(TELE_URL)
+    return out
+
+
+def snow(get):
+    """Rutgers haftalık kar örtüsü (km²): Avrasya ve kuzey yarımküre karaları; bu ve geçen sezon, 1991–2020 hafta ortalaması ve aralığı"""
+    out = {}
+    for reg, name in (('eurasia', 'eurasia'), ('nhland', 'nh')):
+        rows = []
+        for line in get(SNOW_URL.format(reg)).decode('latin-1').splitlines():
+            p = line.split()
+            if len(p) == 3 and p[0].isdigit():
+                rows.append((int(p[0]), int(p[1]), int(p[2]) / 1e6))   # milyon km²
+        clim = {}
+        for y, w, v in rows:
+            if 1991 <= y <= 2020:
+                clim.setdefault(w, []).append(v)
+        out[name] = {
+            'weeks': [(y, w, round(v, 2)) for y, w, v in rows[-110:]],   # son ~2 yıl
+            'clim': {w: [round(sum(v) / len(v), 2), round(min(v), 2), round(max(v), 2)] for w, v in sorted(clim.items())},
+        }
+    out['source_time'] = last_modified(SNOW_URL.format('eurasia'))
+    return out
+
+
+def ice(get):
+    """NSIDC Arktik deniz buzu alanı (milyon km²): son 2 yıl günlük ve 1981–2010 ortalaması, %10–%90 aralığı"""
+    rows = []
+    for line in get(ICE_URL).decode('latin-1').splitlines()[2:]:
+        p = [x.strip() for x in line.split(',')]
+        if len(p) >= 4 and p[0].isdigit():
+            rows.append((f'{int(p[0]):04d}-{int(p[1]):02d}-{int(p[2]):02d}', float(p[3])))
+    clim = {}
+    for line in get(ICE_CLIM).decode('latin-1').splitlines():
+        p = [x.strip() for x in line.split(',')]
+        if len(p) >= 8 and p[0].isdigit():
+            clim[int(p[0])] = [float(p[1]), float(p[3]), float(p[7])]   # ortalama, %10, %90
+    return {'days': rows[-760:], 'clim': clim, 'source_time': last_modified(ICE_URL)}
+
+
 def endeksler(out_dir, get, log):
     path = os.path.join(out_dir, 'endeks', 'meta.json')
     old = {}
@@ -164,7 +224,8 @@ def endeksler(out_dir, get, log):
     # Her gösterge ayrı: biri hata verirse eski değeri kalır
     for name, fn in [('ao', lambda: teleconnection(get, 'ao')), ('nao', lambda: teleconnection(get, 'nao')),
                      ('pna', lambda: teleconnection(get, 'pna')), ('aao', lambda: teleconnection(get, 'aao')),
-                     ('mjo', lambda: mjo(get)), ('qbo', lambda: qbo(get)), ('enso', lambda: enso(get))]:
+                     ('mjo', lambda: mjo(get)), ('qbo', lambda: qbo(get)), ('enso', lambda: enso(get)),
+                     ('tele', lambda: tele(get)), ('snow', lambda: snow(get)), ('ice', lambda: ice(get))]:
         try:
             data[name] = fn()
         except Exception as e:  # noqa: BLE001
