@@ -22,6 +22,8 @@ Alanlar: 850 hPa sıcaklık ve yükseklik, 500 hPa yükseklik ve sıcaklık, 500
 
 Geçmiş analiz: `arsiv/<YYYYMMDDHH>/` klasörlerinde ECMWF 00Z ve 12Z koşularının başlangıç haritaları (500/850 hPa, basınç, 2 m sıcaklık ve anomaliler), 60 gün saklanır.
 
+Göstergeler (`endeks.py` → `endeks/meta.json`, 3 saatte bir yenilenir): AO, NAO, PNA ve AAO için son 150 günün gözlemi, GEFS'in 31 üyeli ve GFS'in 15 günlük tahmini (NOAA CPC); MJO için NOAA PSL'nin gerçek zamanlı OMI endeksi, RMM faz düzlemine çevrilmiş (x = PC2, y = −PC1); QBO için 30 ve 50 hPa aylık ekvator rüzgarı; ENSO için haftalık Niño 3.4 anomalisi ve ONI (NOAA CPC).
+
 Anomaliler, `klima/z500_era5_1990_2019.npz` ve `klima/t850_era5_1990_2019.npz` dosyalarındaki 1990–2019 ortalamasına göre hesaplanır. Bu dosya [WeatherBench2](https://weatherbench2.readthedocs.io) ERA5 iklim ortalamasından (1,5°, 5 günde bir) üretildi. Copernicus İklim Değişikliği Servisi bilgisinden değiştirilerek elde edilmiştir.
 
 Dosya biçimi: `<model>/<koşu YYYYMMDDHH>/<alan>.<bölge>.bin.gz`; koşuların listesi `index.json` içinde. Bölgeler: `tr` (Türkiye, 0,25°, 3 saatte bir) ve `eu` (Avrupa, Atlantik ve Kuzey Afrika, 0,5°, 6 saatte bir). İçerik gzip'li int16 ızgaralardır. Her satır soldan farklarla (16 bit taşmalı) yazılır, sonra önce bütün düşük baytlar, ardından bütün yüksek baytlar gelir. Gerçek değer = ham × `scale`, eksik değer -32768. Izgaralar, adımlar ve ölçekler `<model>/meta.json` içindedir.

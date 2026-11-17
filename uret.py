@@ -30,6 +30,8 @@ import urllib.request
 import eccodes
 import numpy as np
 
+from endeks import endeksler
+
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'out')
 
 # Hedef ızgaralar: kuzeyden güneye, batıdan doğuya. every: kaç saatte bir adım yazılır
@@ -574,6 +576,11 @@ def main():
         steps = [int(x) for x in args[i + 1].split(',')]
         args = args[:i] + args[i + 2:]
     models = args or ['gfs', 'ecmwf', 'icon']
+    if not steps:
+        try:
+            endeksler(OUT, get, log)   # AO, NAO, PNA, AAO, MJO, QBO, ENSO
+        except Exception as e:  # noqa: BLE001
+            log('göstergeler', 'HATA', repr(e))
     failed = []
     for m in models:
         try:
