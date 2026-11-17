@@ -144,10 +144,7 @@ def endeksler(out_dir, get, log):
             log('gösterge', name, 'HATA', repr(e))
             if name in old:
                 data[name] = old[name]
-    if json.dumps({k: v for k, v in data.items() if k != 'generated'}, sort_keys=True) == \
-            json.dumps({k: v for k, v in old.items() if k != 'generated'}, sort_keys=True):
-        log('göstergelerde değişiklik yok')
-        return
+    # Değer değişmese de yazılır: "generated" son kontrol saatidir, sitede verinin güncel olduğu buradan görülür
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as fh:
         json.dump(data, fh, ensure_ascii=False, separators=(',', ':'))
