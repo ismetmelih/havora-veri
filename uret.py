@@ -83,6 +83,13 @@ FIELDS = {
     't70': ('°C', 0.1),
     'z100': ('m', 1),        # 100 hPa yükseklik (tropopoz civarı)
     't100': ('°C', 0.1),
+    'thk': ('m', 1),         # 1000–500 hPa kalınlığı (kar çizgisi: 540–552 dam)
+    'ptype': ('kod', 1),     # yağış türü: 0 yok, 1 yağmur, 2 kar, 3 donan yağmur, 4 buz/sulu kar, 5 karla karışık yağmur
+    'ws250': ('m/s', 0.1),   # 250 hPa rüzgar hızı (jet akımı)
+    'u250': ('m/s', 0.1),
+    'v250': ('m/s', 0.1),
+    'rh700': ('%', 1),       # 700 hPa bağıl nem
+    'pwat': ('mm', 0.1),     # yağış suyu (atmosferdeki toplam su buharı)
 }
 # Yalnızca bazı bölgelerde yazılan alanlar (stratosfer haritaları kutup/dünya görünümü için)
 FIELD_REGIONS = {k: ('world',) for k in ('z50', 't50', 'z10', 't10', 'z30', 't30', 'z70', 't70', 'z100', 't100')}
@@ -94,6 +101,7 @@ KEEP = 4         # model başına saklanan koşu sayısı
 MIN_H = 12       # yeni koşu, ilk bu kadar saati hazır olunca yayınlanır (kalanı geldikçe eklenir)
 # Koşunun meta.json → series'inde olması gereken hesaplar; eksikse koşu yeniden işlenir
 SERIES_NEEDED = {'gfs': ('vt100', 'wave1_10', 'u60_prof'), 'ecmwf': ('vt100', 'wave1_10')}
+FIELDS_NEEDED = ('thk', 'ptype', 'ws250', 'rh700', 'pwat')   # eksikse koşu bir kez yeniden işlenir
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'onbellek')   # indirilen ham adımlar (yayınlanmaz)
 KEEP_WORLD = 2   # dünya bölgesi (en büyük dosyalar) bu kadar yeni koşuda tutulur
 KLIMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'klima')
@@ -153,12 +161,15 @@ def messages(data):
         os.unlink(path)
 
 
-def subset(vals, lats, lons):
+def subset(vals, lats, lons, only=None):
     """Kaynak ızgaradan bütün bölgelerin noktalarını seç → NPTS uzunlukta düz dizi.
-    Kaynağın kapsamadığı noktalar (ör. ICON-EU'nun dışı) NaN olur."""
+    Kaynağın kapsamadığı noktalar (ör. ICON-EU'nun dışı) ve only dışındaki bölgeler NaN olur."""
     lons = np.where(lons > 180, lons - 360, lons)
     parts = []
-    for r in REGIONS.values():
+    for key, r in REGIONS.items():
+        if only and key not in only:
+            parts.append(np.full(r['ny'] * r['nx'], np.nan))
+            continue
         yi = np.array([np.argmin(np.abs(lats - la)) for la in r['lats']])
         xi = np.array([np.argmin(np.abs(lons - lo)) for lo in r['lons']])
         dy, dx = np.abs(lats[yi] - r['lats']), np.abs(lons[xi] - r['lons'])
@@ -224,6 +235,41 @@ def add_anomaly(f, run):
         if f.get(var):
             clim = Climate(var)
             f[f'{var}a'] = {s: z - clim.at(run + dt.timedelta(hours=s)) for s, z in f[var].items()}
+
+
+def derived(f, st):
+    """Kalınlık ve 250 hPa rüzgar hızı (bileşenler varsa)"""
+    if st in f.get('z500', {}) and st in f.get('z1000', {}):
+        f['thk'][st] = f['z500'][st] - f['z1000'][st]
+    if st in f.get('u250', {}) and st in f.get('v250', {}):
+        f['ws250'][st] = np.hypot(f['u250'][st], f['v250'][st])
+
+
+def ptype_code(rain=None, snow=None, frz=None, ice=None):
+    """GFS'in evet/hayır yağış türü bayraklarından tek kod (öncelik: donan yağmur, buz, karışık, kar, yağmur)"""
+    z = np.zeros(NPTS)
+    r = (rain if rain is not None else z) >= 0.5
+    sn = (snow if snow is not None else z) >= 0.5
+    code = np.where(r, 1, 0)
+    code = np.where(sn, 2, code)
+    code = np.where(r & sn, 5, code)
+    code = np.where((ice if ice is not None else z) >= 0.5, 4, code)
+    code = np.where((frz if frz is not None else z) >= 0.5, 3, code)
+    return code.astype(float)
+
+
+# ECMWF ptype → bizim kod (1 yağmur, 3 donan yağmur, 5 kar, 6 ıslak kar, 7 karışık, 8 buz taneleri, 12 donan çisenti)
+EC_PTYPE = {1: 1, 3: 3, 5: 2, 6: 2, 7: 5, 8: 4, 12: 3}
+# ICON ww (WMO hava kodu) → bizim kod
+def icon_ptype(ww):
+    ww = np.nan_to_num(ww, nan=0).astype(int)
+    out = np.zeros(ww.shape)
+    out[np.isin(ww, list(range(51, 56)) + list(range(58, 66)) + [80, 81, 82])] = 1
+    out[np.isin(ww, list(range(70, 79)) + [85, 86])] = 2
+    out[np.isin(ww, [56, 57, 66, 67])] = 3
+    out[np.isin(ww, [79, 87, 88, 89, 90])] = 4
+    out[np.isin(ww, [68, 69, 83, 84])] = 5
+    return out
 
 
 def heat_flux(v, t, lats):
@@ -433,7 +479,8 @@ def progressive(model, run, want, ready, fetch, steps_filter):
     rid = f'{run:%Y%m%d%H}'
     old = meta_of(model, rid)
     # Yeni hesaplar eklenince (ör. stratosfer kesitleri) eski biçimde yazılmış koşu bir kez yeniden işlenir
-    stale = bool(old) and any(k not in old.get('series', {}) for k in SERIES_NEEDED.get(model, ()))
+    stale = bool(old) and (any(k not in old.get('series', {}) for k in SERIES_NEEDED.get(model, ()))
+                           or any(k not in old.get('fields', {}) for k in FIELDS_NEEDED))
     if old and old.get('complete', True) and not steps_filter and not stale:
         log(model, 'yeni koşu yok', run)
         return None
@@ -474,7 +521,7 @@ def gfs_run(run, ready, steps_filter):
     rid = f'{run:%Y%m%d%H}'
     want = steps_filter or standard_steps(384)
     f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'frz', 'z50', 't50', 'z10', 't10', 'u10',
-                         'z30', 't30', 'z70', 't70', 'z100', 't100')}
+                         'z30', 't30', 'z70', 't70', 'z100', 't100', 'z1000', 'thk', 'ptype', 'u250', 'v250', 'ws250', 'rh700', 'pwat')}
     apcp, csnow = {}, {}
     diag = {}
 
@@ -506,17 +553,32 @@ def gfs_run(run, ready, steps_filter):
         }
 
     def fetch(st):
-        q = (f'dir=%2Fgfs.{run:%Y%m%d}%2F{run:%H}%2Fatmos&file=gfs.t{run:%H}z.pgrb2.0p25.f{st:03d}'
-             '&var_TMP=on&var_HGT=on&var_PRMSL=on&var_APCP=on&var_CSNOW=on&var_GUST=on&var_SNOD=on&var_UGRD=on'
-             '&lev_850_mb=on&lev_500_mb=on&lev_100_mb=on&lev_70_mb=on&lev_50_mb=on&lev_30_mb=on&lev_10_mb=on&lev_mean_sea_level=on&lev_surface=on'
-             '&lev_2_m_above_ground=on&lev_0C_isotherm=on'
-             f'&subregion=&toplat={BOX_N}&leftlon={BOX_W}&rightlon={BOX_E}&bottomlat={BOX_S}')
+        # Türkiye ve Avrupa 0,25° yalnızca kendi kutusundan; dünya 1° ayrı paketten (bütün dünyayı 0,25° indirmek ~5 kat ağır)
+        common = ('&var_TMP=on&var_HGT=on&var_PRMSL=on&var_APCP=on&var_CSNOW=on&var_CRAIN=on&var_CFRZR=on&var_CICEP=on'
+                  '&var_GUST=on&var_SNOD=on&var_UGRD=on&var_VGRD=on&var_RH=on&var_PWAT=on'
+                  '&lev_1000_mb=on&lev_850_mb=on&lev_700_mb=on&lev_500_mb=on&lev_250_mb=on&lev_100_mb=on&lev_70_mb=on&lev_50_mb=on'
+                  '&lev_30_mb=on&lev_10_mb=on&lev_mean_sea_level=on&lev_surface=on&lev_2_m_above_ground=on&lev_0C_isotherm=on'
+                  '&lev_entire_atmosphere_%5C%28considered_as_a_single_layer%5C%29=on')
+        d = f'dir=%2Fgfs.{run:%Y%m%d}%2F{run:%H}%2Fatmos'
+        q_box = f'{d}&file=gfs.t{run:%H}z.pgrb2.0p25.f{st:03d}{common}&subregion=&toplat=72&leftlon=-50&rightlon=70&bottomlat=20'
+        q_world = f'{d}&file=gfs.t{run:%H}z.pgrb2.1p00.f{st:03d}{common}'
 
-        def dl():
-            time.sleep(0.6)  # NOMADS'a nazik ol (dakikada en fazla ~120 istek)
-            return get(f'{GFS_BASE}/cgi-bin/filter_gfs_0p25.pl?{q}')
-        for name, ltype, lev, vals, lats, lons, start in messages(cached(f'gfs/{rid}/{st}', dl)):
-            a = subset(vals, lats, lons)
+        def dl(script, q):
+            def go():
+                time.sleep(0.6)  # NOMADS'a nazik ol (dakikada en fazla ~120 istek)
+                return get(f'{GFS_BASE}/cgi-bin/{script}?{q}')
+            return go
+        merged = {}
+        for name, ltype, lev, vals, lats, lons, start in messages(cached(f'gfs/{rid}/{st}.box', dl('filter_gfs_0p25.pl', q_box))):
+            merged[(name, ltype, lev, start)] = subset(vals, lats, lons, only=('tr', 'eu'))
+        for name, ltype, lev, vals, lats, lons, start in messages(cached(f'gfs/{rid}/{st}.w1', dl('filter_gfs_1p00.pl', q_world))):
+            k = (name, ltype, lev, start)
+            w = subset(vals, lats, lons, only=('world',))
+            merged[k] = np.where(np.isnan(w), merged[k], w) if k in merged else w
+        flags = {}
+        for (name, ltype, lev, start), a in merged.items():
+            if name in ('crain', 'csnow', 'cfrzr', 'cicep') and start == st:
+                flags[name] = a           # anlık bayrak (dosyada bir de aralık ortalaması var)
             if name == 't' and lev == 850 and ltype == 'isobaricInhPa':
                 f['t850'][st] = a - 273.15
             elif name == 't' and lev == 500 and ltype == 'isobaricInhPa':
@@ -525,10 +587,16 @@ def gfs_run(run, ready, steps_filter):
                 f[f't{lev}'][st] = a - 273.15
             elif name == 'gh' and ltype == 'isothermZero':
                 f['frz'][st] = a
-            elif name == 'gh' and ltype == 'isobaricInhPa' and lev in (850, 500, 100, 70, 50, 30, 10):
+            elif name == 'gh' and ltype == 'isobaricInhPa' and lev in (1000, 850, 500, 100, 70, 50, 30, 10):
                 f[f'z{lev}'][st] = a
             elif name == 'u' and lev == 10 and ltype == 'isobaricInhPa':
                 f['u10'][st] = a
+            elif name in ('u', 'v') and lev == 250 and ltype == 'isobaricInhPa':
+                f[f'{name}250'][st] = a
+            elif name == 'r' and lev == 700 and ltype == 'isobaricInhPa':
+                f['rh700'][st] = a
+            elif name == 'pwat':
+                f['pwat'][st] = a
             elif name == 'sde':
                 f['sdep'][st] = a * 100       # m → cm
             elif name == 'prmsl':
@@ -541,6 +609,9 @@ def gfs_run(run, ready, steps_filter):
                 apcp[st] = a  # koşu başından beri toplam (dosyada bir de 6 saatlik kova var, o atlanır)
             elif name == 'csnow':
                 csnow[st] = a
+        if st > 0:
+            f['ptype'][st] = ptype_code(flags.get('crain'), flags.get('csnow'), flags.get('cfrzr'), flags.get('cicep'))
+        derived(f, st)
         try:
             fetch_prof(st)
         except Exception as e:  # noqa: BLE001 — kesit paketi gelmezse harita verisi yine yayınlansın
@@ -586,8 +657,10 @@ def ecmwf_run(run, ready, steps_filter):
     want = steps_filter or standard_steps(maxh)
     params = {('t', '850'), ('t', '500'), ('gh', '850'), ('gh', '500'), ('msl', None), ('2t', None), ('10fg', None), ('tp', None), ('sf', None),
               ('t', '50'), ('gh', '50'), ('t', '10'), ('gh', '10'), ('u', '10'), ('sd', None), ('rsn', None),
-              ('t', '100'), ('gh', '100'), ('v', '100')}
-    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'z50', 't50', 'z10', 't10', 'u10', 'z100', 't100', 'v100')}
+              ('t', '100'), ('gh', '100'), ('v', '100'),
+              ('gh', '1000'), ('u', '250'), ('v', '250'), ('r', '700'), ('tcwv', None), ('ptype', None)}
+    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'z50', 't50', 'z10', 't10', 'u10', 'z100', 't100', 'v100',
+                         'z1000', 'thk', 'ptype', 'u250', 'v250', 'ws250', 'rh700', 'pwat')}
     swe, rho = {}, {}
     tp, sf = {}, {}
 
@@ -608,12 +681,24 @@ def ecmwf_run(run, ready, steps_filter):
             a = subset(vals, lats, lons)
             if name == 't' and lev in (850, 500, 100, 50, 10):
                 f[f't{lev}'][st] = a - 273.15
-            elif name == 'gh' and lev in (850, 500, 100, 50, 10):
+            elif name == 'gh' and lev in (1000, 850, 500, 100, 50, 10):
                 f[f'z{lev}'][st] = a
             elif name == 'u' and lev == 10:
                 f['u10'][st] = a
             elif name == 'v' and lev == 100:
                 f['v100'][st] = a
+            elif name in ('u', 'v') and lev == 250:
+                f[f'{name}250'][st] = a
+            elif name == 'r' and lev == 700:
+                f['rh700'][st] = a
+            elif name == 'tcwv':
+                f['pwat'][st] = a
+            elif name == 'ptype':
+                code = np.zeros(NPTS)
+                for k2, v2 in EC_PTYPE.items():
+                    code[np.round(a) == k2] = v2
+                code[np.isnan(a)] = np.nan
+                f['ptype'][st] = code
             elif name == 'sd':
                 swe[st] = a                # kar su eşdeğeri (m)
             elif name == 'rsn':
@@ -628,6 +713,7 @@ def ecmwf_run(run, ready, steps_filter):
                 tp[st] = a * 1000          # m → mm
             elif name == 'sf':
                 sf[st] = a * 1000          # m su eşdeğeri → mm ≈ cm kar (10:1)
+        derived(f, st)
 
     res = progressive('ecmwf', run, want, ready, fetch, steps_filter)
     if not res:
@@ -647,7 +733,8 @@ def ecmwf_run(run, ready, steps_filter):
 
 ICON_BASE = 'https://opendata.dwd.de/weather/nwp/icon-eu/grib'
 # Her adımda indirilen değişkenler: (değişken, seviye); 0. saatte birikimli olanlar yok
-ICON_VARS = [('t', 850), ('t', 500), ('fi', 850), ('fi', 500), ('pmsl', None), ('t_2m', None), ('h_snow', None), ('hzerocl', None)]
+ICON_VARS = [('t', 850), ('t', 500), ('fi', 850), ('fi', 500), ('pmsl', None), ('t_2m', None), ('h_snow', None), ('hzerocl', None),
+             ('fi', 1000), ('u', 250), ('v', 250), ('relhum', 700), ('tqv', None), ('ww', None)]
 ICON_ACC = [('vmax_10m', None), ('tot_prec', None), ('snow_gsp', None), ('snow_con', None)]
 
 
@@ -670,7 +757,8 @@ def icon_run(run, ready, steps_filter):
     rid = f'{run:%Y%m%d%H}'
     want = steps_filter or list(range(0, 121, 3))
     g = 9.80665
-    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'frz')}
+    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'frz',
+                         'z1000', 'thk', 'ptype', 'u250', 'v250', 'ws250', 'rh700', 'pwat')}
     prec, snow = {}, {}
 
     def grab(var, st, level=None):
@@ -685,13 +773,18 @@ def icon_run(run, ready, steps_filter):
             'z850': grab('fi', st, 850) / g, 'z500': grab('fi', st, 500) / g,
             'mslp': grab('pmsl', st) / 100, 't2m': grab('t_2m', st) - 273.15,
             'sdep': grab('h_snow', st) * 100, 'frz': grab('hzerocl', st),
+            'z1000': grab('fi', st, 1000) / g, 'u250': grab('u', st, 250), 'v250': grab('v', st, 250),
+            'rh700': grab('relhum', st, 700), 'pwat': grab('tqv', st),
         }
+        if st > 0:
+            row['ptype'] = icon_ptype(grab('ww', st))
         if st > 0:
             row['gust'] = grab('vmax_10m', st) * 3.6
             prec[st] = grab('tot_prec', st)
             snow[st] = grab('snow_gsp', st) + grab('snow_con', st)
         for k, v in row.items():
             f[k][st] = v
+        derived(f, st)
 
     res = progressive('icon', run, want, ready, fetch, steps_filter)
     if not res:

@@ -20,6 +20,8 @@ GitHub Actions işi (`calis.sh`) 5,5 saat açık kalır ve 15 dakikada bir `uret
 
 Alanlar: 850 hPa sıcaklık ve yükseklik, 500 hPa yükseklik ve sıcaklık, 500 ve 850 hPa anomali, deniz seviyesi basıncı, 2 m sıcaklık, rüzgar hamlesi, 6 ve 24 saatlik yağış ve kar, toplam kar, kar kalınlığı, donma seviyesi (GFS, ICON), 50 ve 10 hPa yükseklik ve sıcaklık (GFS, ECMWF; yalnızca dünya bölgesi). Stratosfer serileri (`meta.json` → `series`): 60°K'de 10 hPa kuşak ortalaması batı rüzgarı, 60–90°K ortalama 10 hPa sıcaklığı, 10 hPa'da 60°K dalga-1/dalga-2 genliği (m), 45–75°K 100 hPa girdap ısı akısı [v'T'] (K·m/s); GFS'te ayrıca 1° ayrı paketten 19 seviyede (1–1000 hPa) 60°K rüzgar profili (`u60_prof`) ve 60–90°K sıcaklık profili (`tcap_prof`). 30, 70 hPa (GFS) ve 100 hPa (GFS, ECMWF) yükseklik ve sıcaklık haritaları.
 
+Kar ve dinamik alanları: 1000–500 hPa kalınlığı (`thk`), yağış türü (`ptype`: 1 yağmur, 2 kar, 3 donan yağmur, 4 buz/sulu kar, 5 karışık; GFS bayraklarından, ECMWF `ptype`'tan, ICON `ww`'den), 250 hPa rüzgar (`u250`, `v250`, `ws250`), 700 hPa nem (`rh700`), yağış suyu (`pwat`). GFS iki paketten indirilir: Türkiye ve Avrupa 0,25° kendi kutusundan, dünya 1° ayrı paketten.
+
 Geçmiş analiz: `arsiv/<YYYYMMDDHH>/` klasörlerinde ECMWF 00Z ve 12Z koşularının başlangıç haritaları (500/850 hPa, basınç, 2 m sıcaklık ve anomaliler), 60 gün saklanır.
 
 Göstergeler (`endeks.py` → `endeks/meta.json`, 3 saatte bir yenilenir): AO, NAO, PNA ve AAO için son 150 günün gözlemi, GEFS'in 31 üyeli ve GFS'in 15 günlük tahmini (NOAA CPC); MJO için NOAA PSL'nin gerçek zamanlı OMI endeksi, RMM faz düzlemine çevrilmiş (x = PC2, y = −PC1); QBO için 30 ve 50 hPa aylık ekvator rüzgarı; ENSO için haftalık Niño 3.4 anomalisi ve ONI (NOAA CPC).
