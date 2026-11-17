@@ -67,11 +67,22 @@ FIELDS = {
     'pr24': ('mm', 0.1),     # son 24 saatte yağış
     'sn24': ('cm', 0.1),     # son 24 saatte kar
     'z500a': ('m', 1),       # 500 hPa yüksekliğin 1990–2019 ortalamasından farkı
+    't850a': ('°C', 0.1),    # 850 hPa sıcaklığın 1990–2019 ortalamasından farkı
+    'snacc': ('cm', 0.1),    # koşu başından beri toplam kar
+    'sdep': ('cm', 1),       # yerdeki kar kalınlığı
+    'frz': ('m', 10),        # donma seviyesi (0 °C yüksekliği)
+    'z50': ('m', 1),         # 50 hPa yükseklik (stratosfer)
+    't50': ('°C', 0.1),      # 50 hPa sıcaklık
+    'z10': ('m', 2),         # 10 hPa yükseklik (kutup girdabı)
+    't10': ('°C', 0.1),      # 10 hPa sıcaklık
 }
+# Yalnızca bazı bölgelerde yazılan alanlar (stratosfer haritaları kutup/dünya görünümü için)
+FIELD_REGIONS = {'z50': ('world',), 't50': ('world',), 'z10': ('world',), 't10': ('world',)}
+ARCHIVE_DAYS = 60   # geçmiş analiz arşivi (ECMWF 00Z/12Z başlangıç haritaları) kaç gün saklanır
 
 KEEP = 4         # model başına saklanan koşu sayısı
 KEEP_WORLD = 2   # dünya bölgesi (en büyük dosyalar) bu kadar yeni koşuda tutulur
-CLIMATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'klima', 'z500_era5_1990_2019.npz')
+KLIMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'klima')
 
 UA = {'User-Agent': 'havora-veri/1.0 (+https://github.com/ismetmelih/havora-veri)'}
 
@@ -158,18 +169,19 @@ def cumulative_to(steps, cum, hours=6):
 
 
 def accumulations(f, steps, rain, snow):
-    """Birikmiş yağış ve kardan 6 ve 24 saatlik toplamlar"""
+    """Birikmiş yağış ve kardan 6 ve 24 saatlik toplamlar, koşu başından beri toplam kar"""
     f['pr6'], f['sn6'] = cumulative_to(steps, rain, 6), cumulative_to(steps, snow, 6)
     f['pr24'], f['sn24'] = cumulative_to(steps, rain, 24), cumulative_to(steps, snow, 24)
+    f['snacc'] = {s: np.maximum(snow[s], 0) for s in steps if s in snow}
 
 
 class Climate:
-    """500 hPa uzun yıllar ortalaması (ERA5 1990–2019, WeatherBench2): her 5 günde bir, 1,5°.
-    Bölge noktalarına çift doğrusal, günler arasında doğrusal ara değer."""
+    """Uzun yıllar ortalaması (ERA5 1990–2019, WeatherBench2): her 5 günde bir, 1,5°.
+    z500: m, t850: 0,1 °C. Bölge noktalarına çift doğrusal, günler arasında doğrusal ara değer."""
 
-    def __init__(self):
-        d = np.load(CLIMATE)
-        self.z, self.doy = d['z500'].astype(float), d['doy']
+    def __init__(self, var):
+        d = np.load(os.path.join(KLIMA, f'{var}_era5_1990_2019.npz'))
+        self.z, self.doy = d[var].astype(float) * (0.1 if var == 't850' else 1), d['doy']
         lat, lon = d['lat'], d['lon']          # lat 90 → -90, lon 0 → 358.5
         plat = np.concatenate([np.repeat(r['lats'], r['nx']) for r in REGIONS.values()])
         plon = np.concatenate([np.tile(r['lons'], r['ny']) for r in REGIONS.values()]) % 360
@@ -193,14 +205,39 @@ class Climate:
 
 
 def add_anomaly(f, run):
-    """500 hPa anomali: model yüksekliği eksi o günün uzun yıllar ortalaması (m)"""
-    clim = Climate()
-    f['z500a'] = {s: z - clim.at(run + dt.timedelta(hours=s)) for s, z in f['z500'].items()}
+    """500 hPa ve 850 hPa anomali: model değeri eksi o günün uzun yıllar ortalaması"""
+    for var in ('z500', 't850'):
+        if f.get(var):
+            clim = Climate(var)
+            f[f'{var}a'] = {s: z - clim.at(run + dt.timedelta(hours=s)) for s, z in f[var].items()}
 
 
-def write(model, run, steps, fields, extra=None, regions=tuple(REGIONS)):
+def strat_series(f, steps):
+    """Kutup girdabı: 60°K'de 10 hPa kuşak ortalaması batı rüzgarı (m/s) ve 60–90°K ortalama 10 hPa sıcaklığı (°C)"""
+    w = REGIONS['world']
+    n = w['ny'] * w['nx']
+    lats = w['lats']
+    out = {'u60_10': [], 'tpolar_10': []}
+    cap = lats >= 60
+    weights = np.cos(np.radians(lats[cap]))
+    for s in steps:
+        u, t = f.get('u10', {}).get(s), f.get('t10', {}).get(s)
+        if u is None or t is None:
+            out['u60_10'].append(None)
+            out['tpolar_10'].append(None)
+            continue
+        u = u[w['off']:w['off'] + n].reshape(w['ny'], w['nx'])
+        t = t[w['off']:w['off'] + n].reshape(w['ny'], w['nx'])
+        out['u60_10'].append(round(float(np.nanmean(u[np.argmin(np.abs(lats - 60))])), 1))
+        out['tpolar_10'].append(round(float(np.nansum(np.nanmean(t[cap], axis=1) * weights) / weights.sum()), 1))
+    return out
+
+
+def write(model, run, steps, fields, extra=None, regions=tuple(REGIONS), base=None, keep=True):
     add_anomaly(fields, run)
-    d = os.path.join(OUT, model, f'{run:%Y%m%d%H}')
+    if fields.get('u10') and fields.get('t10'):
+        extra = {**(extra or {}), 'series': {'steps': steps, **strat_series(fields, steps)}}
+    d = os.path.join(base or os.path.join(OUT, model), f'{run:%Y%m%d%H}')
     os.makedirs(d, exist_ok=True)
     meta = {
         'model': model, 'run': run.strftime('%Y-%m-%dT%H:00Z'), 'generated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ'),
@@ -212,7 +249,7 @@ def write(model, run, steps, fields, extra=None, regions=tuple(REGIONS)):
         meta['regions'][key] = {'latN': r['latN'], 'lonW': r['lonW'], 'step': r['step'], 'ny': r['ny'], 'nx': r['nx'], 'steps': rsteps}
         n = r['ny'] * r['nx']
         for name, (unit, scale) in FIELDS.items():
-            if name not in fields:
+            if name not in fields or key not in FIELD_REGIONS.get(name, (key,)):
                 continue
             buf = np.full((len(rsteps), n), -32768, dtype='<i2')
             have = 0
@@ -236,15 +273,19 @@ def write(model, run, steps, fields, extra=None, regions=tuple(REGIONS)):
     with open(os.path.join(d, 'meta.json'), 'w', encoding='utf-8') as f:
         json.dump(meta, f, ensure_ascii=False)
     log(model, run, len(steps), 'adım,', ', '.join(meta['fields']), 'yazıldı')
-    prune(model)
+    if keep:
+        prune(model)
 
 
-def runs_of(model):
-    """Saklanan koşu klasörleri, en yeni önce"""
-    d = os.path.join(OUT, model)
+def runs_in(d):
+    """Bir klasördeki koşu klasörleri (YYYYMMDDHH), en yeni önce"""
     if not os.path.isdir(d):
         return []
     return sorted((x for x in os.listdir(d) if re.fullmatch(r'\d{10}', x) and os.path.exists(os.path.join(d, x, 'meta.json'))), reverse=True)
+
+
+def runs_of(model):
+    return runs_in(os.path.join(OUT, model))
 
 
 def prune(model):
@@ -306,12 +347,13 @@ def gfs(steps_filter=None):
         return log('GFS: yeni koşu yok', run)
     steps = steps_filter or standard_steps(384)
     log('GFS', run, len(steps), 'adım indiriliyor')
-    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust')}
+    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'frz', 'z50', 't50', 'z10', 't10', 'u10')}
     apcp, csnow = {}, {}
     for s in steps:
         q = (f'dir=%2Fgfs.{run:%Y%m%d}%2F{run:%H}%2Fatmos&file=gfs.t{run:%H}z.pgrb2.0p25.f{s:03d}'
-             '&var_TMP=on&var_HGT=on&var_PRMSL=on&var_APCP=on&var_CSNOW=on&var_GUST=on'
-             '&lev_850_mb=on&lev_500_mb=on&lev_mean_sea_level=on&lev_surface=on&lev_2_m_above_ground=on'
+             '&var_TMP=on&var_HGT=on&var_PRMSL=on&var_APCP=on&var_CSNOW=on&var_GUST=on&var_SNOD=on&var_UGRD=on'
+             '&lev_850_mb=on&lev_500_mb=on&lev_50_mb=on&lev_10_mb=on&lev_mean_sea_level=on&lev_surface=on'
+             '&lev_2_m_above_ground=on&lev_0C_isotherm=on'
              f'&subregion=&toplat={BOX_N}&leftlon={BOX_W}&rightlon={BOX_E}&bottomlat={BOX_S}')
         data = get(f'{base}/cgi-bin/filter_gfs_0p25.pl?{q}')
         for name, ltype, lev, vals, lats, lons, start in messages(data):
@@ -320,10 +362,16 @@ def gfs(steps_filter=None):
                 f['t850'][s] = a - 273.15
             elif name == 't' and lev == 500 and ltype == 'isobaricInhPa':
                 f['t500'][s] = a - 273.15
-            elif name == 'gh' and lev == 850:
-                f['z850'][s] = a
-            elif name == 'gh' and lev == 500:
-                f['z500'][s] = a
+            elif name == 't' and lev in (50, 10) and ltype == 'isobaricInhPa':
+                f[f't{lev}'][s] = a - 273.15
+            elif name == 'gh' and ltype == 'isothermZero':
+                f['frz'][s] = a
+            elif name == 'gh' and ltype == 'isobaricInhPa' and lev in (850, 500, 50, 10):
+                f[f'z{lev}'][s] = a
+            elif name == 'u' and lev == 10 and ltype == 'isobaricInhPa':
+                f['u10'][s] = a
+            elif name == 'sde':
+                f['sdep'][s] = a * 100       # m → cm
             elif name == 'prmsl':
                 f['mslp'][s] = a / 100
             elif name == '2t':
@@ -365,8 +413,10 @@ def ecmwf(steps_filter=None):
         return log('ECMWF: yeni koşu yok', run)
     steps = steps_filter or standard_steps(maxh)
     log('ECMWF', run, len(steps), 'adım indiriliyor')
-    want = {('t', '850'), ('t', '500'), ('gh', '850'), ('gh', '500'), ('msl', None), ('2t', None), ('10fg', None), ('tp', None), ('sf', None)}
-    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust')}
+    want = {('t', '850'), ('t', '500'), ('gh', '850'), ('gh', '500'), ('msl', None), ('2t', None), ('10fg', None), ('tp', None), ('sf', None),
+            ('t', '50'), ('gh', '50'), ('t', '10'), ('gh', '10'), ('u', '10'), ('sd', None), ('rsn', None)}
+    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'z50', 't50', 'z10', 't10', 'u10')}
+    swe, rho = {}, {}
     tp, sf = {}, {}
     for s in steps:
         stem = f'{base}/{run:%Y%m%d}/{run:%H}z/ifs/0p25/{stream}/{run:%Y%m%d%H}0000-{s}h-{stream}-fc'
@@ -379,14 +429,16 @@ def ecmwf(steps_filter=None):
                 chunks.append(resp.read())
         for name, ltype, lev, vals, lats, lons, _ in messages(b''.join(chunks)):
             a = subset(vals, lats, lons)
-            if name == 't' and lev == 850:
-                f['t850'][s] = a - 273.15
-            elif name == 't' and lev == 500:
-                f['t500'][s] = a - 273.15
-            elif name == 'gh' and lev == 850:
-                f['z850'][s] = a
-            elif name == 'gh' and lev == 500:
-                f['z500'][s] = a
+            if name == 't' and lev in (850, 500, 50, 10):
+                f[f't{lev}'][s] = a - 273.15
+            elif name == 'gh' and lev in (850, 500, 50, 10):
+                f[f'z{lev}'][s] = a
+            elif name == 'u' and lev == 10:
+                f['u10'][s] = a
+            elif name == 'sd':
+                swe[s] = a                # kar su eşdeğeri (m)
+            elif name == 'rsn':
+                rho[s] = a                # kar yoğunluğu (kg/m³)
             elif name == 'msl':
                 f['mslp'][s] = a / 100
             elif name == '2t':
@@ -399,6 +451,9 @@ def ecmwf(steps_filter=None):
                 sf[s] = a * 1000          # m su eşdeğeri → mm ≈ cm kar (10:1)
     tp.setdefault(0, np.zeros(NPTS))
     sf.setdefault(0, np.zeros(NPTS))
+    for s in swe:
+        if s in rho:
+            f['sdep'][s] = np.where(rho[s] > 0, swe[s] * 1000 / np.maximum(rho[s], 50) * 100, 0)  # cm
     accumulations(f, steps, tp, sf)
     write('ecmwf', run, steps, f, {'name': 'ECMWF', 'source': 'ECMWF açık veri (CC BY 4.0)', 'resolution': '0,25°'})
 
@@ -430,7 +485,7 @@ def icon(steps_filter=None):
         return None
 
     g = 9.80665
-    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust')}
+    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'frz')}
     prec, snow = {}, {}
     for s in steps:
         f['t850'][s] = grab('t', s, 850) - 273.15
@@ -439,6 +494,8 @@ def icon(steps_filter=None):
         f['z500'][s] = grab('fi', s, 500) / g
         f['mslp'][s] = grab('pmsl', s) / 100
         f['t2m'][s] = grab('t_2m', s) - 273.15
+        f['sdep'][s] = grab('h_snow', s) * 100
+        f['frz'][s] = grab('hzerocl', s)
         if s > 0:
             f['gust'][s] = grab('vmax_10m', s) * 3.6
             prec[s] = grab('tot_prec', s)
@@ -447,6 +504,48 @@ def icon(steps_filter=None):
     snow[0] = np.zeros(NPTS)
     accumulations(f, steps, prec, snow)
     write('icon', run, steps, f, {'name': 'ICON', 'source': 'DWD açık veri', 'resolution': '0,0625° → 0,25°', 'coverage': '29,5–70,5°K, 23,5°B–62,5°D'}, regions=('tr', 'eu'))  # ICON-EU dünyayı kapsamaz
+
+
+# ---------------------------------------------------------------- Geçmiş analiz arşivi
+
+def archive():
+    """ECMWF 00Z/12Z koşularının başlangıç (0. saat) haritaları: gerçekleşen durum. Son 5 günde eksik olanlar
+    indirilir (ECMWF açık veri sunucusu birkaç gün geriye gider), ARCHIVE_DAYS günden eskiler silinir."""
+    base = 'https://data.ecmwf.int/forecasts'
+    adir = os.path.join(OUT, 'arsiv')
+    have = set(runs_in(adir))
+    now = dt.datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    want = {('gh', '500'), ('gh', '850'), ('t', '850'), ('msl', None), ('2t', None)}
+    for back in range(0, 5 * 24):
+        t = now - dt.timedelta(hours=back)
+        if t.hour not in (0, 12) or f'{t:%Y%m%d%H}' in have:
+            continue
+        stem = f'{base}/{t:%Y%m%d}/{t:%H}z/ifs/0p25/oper/{t:%Y%m%d%H}0000-0h-oper-fc'
+        if not exists(f'{stem}.index'):
+            continue
+        index = [json.loads(line) for line in get(f'{stem}.index').decode().splitlines() if line.strip()]
+        chunks = []
+        for r in (r for r in index if (r['param'], r.get('levelist')) in want):
+            req = urllib.request.Request(f'{stem}.grib2', headers={**UA, 'Range': f"bytes={r['_offset']}-{r['_offset'] + r['_length'] - 1}"})
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                chunks.append(resp.read())
+        f = {k: {} for k in ('z500', 'z850', 't850', 'mslp', 't2m')}
+        for name, _, lev, vals, lats, lons, _ in messages(b''.join(chunks)):
+            a = subset(vals, lats, lons)
+            if name == 'gh':
+                f[f'z{lev}'][0] = a
+            elif name == 't':
+                f['t850'][0] = a - 273.15
+            elif name == 'msl':
+                f['mslp'][0] = a / 100
+            elif name == '2t':
+                f['t2m'][0] = a - 273.15
+        write('arsiv', t, [0], f, {'name': 'ECMWF analiz', 'source': 'ECMWF açık veri (CC BY 4.0)', 'resolution': '0,25°'},
+              regions=('tr', 'eu'), base=adir, keep=False)
+    limit = f'{now - dt.timedelta(days=ARCHIVE_DAYS):%Y%m%d%H}'
+    for old in runs_in(adir):
+        if old < limit:
+            shutil.rmtree(os.path.join(adir, old))
 
 
 def write_index():
@@ -461,8 +560,10 @@ def write_index():
                          'hours': mm['regions']['tr']['steps'][-1], 'regions': list(mm['regions'])})
         if runs:
             models_meta[m] = {'runs': runs}
+    arsiv = [{'id': r, 'run': f'{r[:4]}-{r[4:6]}-{r[6:8]}T{r[8:]}:00Z'} for r in runs_in(os.path.join(OUT, 'arsiv'))]
     with open(os.path.join(OUT, 'index.json'), 'w', encoding='utf-8') as fh:
-        json.dump({'version': 2, 'updated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ'), 'models': models_meta}, fh, ensure_ascii=False)
+        json.dump({'version': 2, 'updated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ'), 'models': models_meta, 'archive': arsiv},
+                  fh, ensure_ascii=False)
 
 
 def main():
@@ -481,6 +582,12 @@ def main():
             log(m, 'HATA', repr(e))
             failed.append(m)
         write_index()  # her modelden sonra: biten modeller hemen görünsün
+    if not steps:
+        try:
+            archive()
+        except Exception as e:  # noqa: BLE001
+            log('arşiv', 'HATA', repr(e))
+        write_index()
     if failed and len(failed) == len(models):
         sys.exit(1)
 
