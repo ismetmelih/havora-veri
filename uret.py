@@ -113,6 +113,8 @@ MIN_H = 12       # yeni koşu, ilk bu kadar saati hazır olunca yayınlanır (ka
 SERIES_NEEDED = {'gfs': ('vt100', 'wave1_10', 'u60_prof'), 'ecmwf': ('vt100', 'wave1_10')}
 _NEW = ('thk', 'ptype', 'ws250', 'rh700', 'pwat')
 FIELDS_NEEDED = {'gfs': _NEW, 'ecmwf': _NEW, 'icon': _NEW}   # eksikse koşu bir kez yeniden işlenir
+# Üretim sürümü: bir modelin hesabı düzeltilince artır, o sürümden eski koşular bir kez yeniden üretilir
+GEN = {'gfs': 2}   # 2: dünya ızgarasında −180° sütunu boştu (dalga-1/2 NaN)
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'onbellek')   # indirilen ham adımlar (yayınlanmaz)
 KEEP_WORLD = 2   # dünya bölgesi (en büyük dosyalar) bu kadar yeni koşuda tutulur
 KLIMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'klima')
@@ -175,7 +177,7 @@ def messages(data):
 def subset(vals, lats, lons, only=None):
     """Kaynak ızgaradan bütün bölgelerin noktalarını seç → NPTS uzunlukta düz dizi.
     Kaynağın kapsamadığı noktalar (ör. ICON-EU'nun dışı) ve only dışındaki bölgeler NaN olur."""
-    lons = np.where(lons > 180, lons - 360, lons)
+    lons = ((lons + 180) % 360) - 180   # 0–360 ızgaralarda 180° de −180° olur (yoksa −180 sütunu boş kalır)
     parts = []
     for key, r in REGIONS.items():
         if only and key not in only:
@@ -283,6 +285,17 @@ def icon_ptype(ww):
     return out
 
 
+def clean_json(x):
+    """NaN/sonsuz sayıları null yap: tarayıcı JSON'u NaN içerince hiç okuyamaz"""
+    if isinstance(x, dict):
+        return {k: clean_json(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [clean_json(v) for v in x]
+    if isinstance(x, float) and not np.isfinite(x):
+        return None
+    return x
+
+
 def heat_flux(v, t, lats):
     """Kuşak ortalaması girdap ısı akısı [v'T'] (K·m/s), 45–75°K kosinüs ağırlıklı ortalama.
     v, t: (enlem, boylam) ızgaraları. Pozitif ve büyükse girdaba yukarı doğru güçlü dalga enerjisi gidiyor demektir."""
@@ -296,6 +309,11 @@ def heat_flux(v, t, lats):
 def wave_amps(z, lats):
     """60°K'de yüksekliğin dalga-1 ve dalga-2 genliği (m): dalga-1 girdabın kaymasını, dalga-2 bölünmesini gösterir"""
     row = z[np.argmin(np.abs(lats - 60))]
+    if not np.isfinite(row).all():
+        if np.isfinite(row).sum() < len(row) * 0.9:
+            return [None, None]
+        idx = np.arange(len(row))
+        row = np.interp(idx, idx[np.isfinite(row)], row[np.isfinite(row)])   # birkaç boş noktayı komşulardan doldur
     c = np.fft.rfft(row - row.mean())
     return [round(float(2 * abs(c[k]) / len(row)), 0) for k in (1, 2)]
 
@@ -341,7 +359,7 @@ def write(model, run, steps, fields, extra=None, regions=tuple(REGIONS), base=No
     d = os.path.join(base or os.path.join(OUT, model), f'{run:%Y%m%d%H}')
     os.makedirs(d, exist_ok=True)
     meta = {
-        'model': model, 'run': run.strftime('%Y-%m-%dT%H:00Z'), 'generated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ'),
+        'model': model, 'run': run.strftime('%Y-%m-%dT%H:00Z'), 'generated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ'), 'gen': GEN.get(model, 1),
         'encoding': 'row-delta+byte-split', 'regions': {}, 'fields': {}, **(extra or {}),
     }
     for key in regions:
@@ -372,7 +390,7 @@ def write(model, run, steps, fields, extra=None, regions=tuple(REGIONS), base=No
                 f.write(packed)
             meta['fields'][name] = {'unit': unit, 'scale': scale}
     with open(os.path.join(d, 'meta.json'), 'w', encoding='utf-8') as f:
-        json.dump(meta, f, ensure_ascii=False)
+        json.dump(clean_json(meta), f, ensure_ascii=False, allow_nan=False)
     log(model, run, len(steps), 'adım,', ', '.join(meta['fields']), 'yazıldı')
     if keep:
         prune(model)
@@ -491,7 +509,8 @@ def progressive(model, run, want, ready, fetch, steps_filter):
     old = meta_of(model, rid)
     # Yeni hesaplar eklenince (ör. stratosfer kesitleri) eski biçimde yazılmış koşu bir kez yeniden işlenir
     stale = bool(old) and (any(k not in old.get('series', {}) for k in SERIES_NEEDED.get(model, ()))
-                           or any(k not in old.get('fields', {}) for k in FIELDS_NEEDED.get(model, ())))
+                           or any(k not in old.get('fields', {}) for k in FIELDS_NEEDED.get(model, ()))
+                           or old.get('gen', 1) < GEN.get(model, 1))
     if old and old.get('complete', True) and not steps_filter and not stale:
         log(model, 'yeni koşu yok', run)
         return None
