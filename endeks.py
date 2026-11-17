@@ -27,6 +27,7 @@ QBO_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/qbo.{}.index'
 ONI_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt'
 NINO_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for'
 NAMES = ('ao', 'nao', 'pna', 'aao', 'mjo', 'qbo', 'enso')
+FORMAT = 2   # çıktı biçimi değişince artır: eski dosya beklemeden yeniden üretilir
 EVERY_H = 1   # NOAA günde bir kez (~14:00 UTC) günceller; saatte bir bakınca en geç 1 saatte gelir
 
 
@@ -154,12 +155,12 @@ def endeksler(out_dir, get, log):
         try:
             age = dt.datetime.utcnow() - dt.datetime.strptime(old['generated'], '%Y-%m-%dT%H:%MZ')
             # Bir gösterge eksikse (kaynak o an yanıt vermediyse) beklemeden bir sonraki turda tekrar dene
-            if age < dt.timedelta(hours=EVERY_H) and all(k in old for k in NAMES):
+            if age < dt.timedelta(hours=EVERY_H) and all(k in old for k in NAMES) and old.get('format') == FORMAT:
                 log('göstergeler güncel')
                 return
         except (KeyError, ValueError):
             pass
-    data = {'generated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ')}
+    data = {'generated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ'), 'format': FORMAT}
     # Her gösterge ayrı: biri hata verirse eski değeri kalır
     for name, fn in [('ao', lambda: teleconnection(get, 'ao')), ('nao', lambda: teleconnection(get, 'nao')),
                      ('pna', lambda: teleconnection(get, 'pna')), ('aao', lambda: teleconnection(get, 'aao')),
