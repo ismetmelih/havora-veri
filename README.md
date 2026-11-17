@@ -22,6 +22,8 @@ Alanlar: 850 hPa sıcaklık ve yükseklik, 500 hPa yükseklik ve sıcaklık, 500
 
 Kar ve dinamik alanları: 1000–500 hPa kalınlığı (`thk`), yağış türü (`ptype`: 1 yağmur, 2 kar, 3 donan yağmur, 4 buz/sulu kar, 5 karışık; GFS bayraklarından, ECMWF `ptype`'tan, ICON `ww`'den), 250 hPa rüzgar (`u250`, `v250`, `ws250`), 700 hPa nem (`rh700`), yağış suyu (`pwat`). GFS iki paketten indirilir: Türkiye ve Avrupa 0,25° kendi kutusundan, dünya 1° ayrı paketten.
 
+ECMWF ENS (`ens/`, 00Z ve 12Z, 360 saat, 6 saatte bir): 51 üyenin ortalaması (500 hPa, 850 hPa sıcaklık, yer basıncı, kalınlık, anomaliler), belirsizlik (`z500s`, `t850s`, `mslps`, standart sapma) ve olasılıklar (`p_tp1/10/25`: 24 saatte >1/10/25 mm yağış; `p_c1`, `p_c2`: 850 hPa sıcaklığın normalin 1 ve 2 standart sapma altında, `p_w1`: 1 standart sapma üstünde olma olasılığı, %). ECMWF'nin hazır "ep" ürünlerinden.
+
 Geçmiş analiz: `arsiv/<YYYYMMDDHH>/` klasörlerinde ECMWF 00Z ve 12Z koşularının başlangıç haritaları (500/850 hPa, basınç, 2 m sıcaklık ve anomaliler), 60 gün saklanır.
 
 Göstergeler (`endeks.py` → `endeks/meta.json`, 3 saatte bir yenilenir): AO, NAO, PNA ve AAO için son 150 günün gözlemi, GEFS'in 31 üyeli ve GFS'in 15 günlük tahmini (NOAA CPC); MJO için NOAA PSL'nin gerçek zamanlı OMI endeksi, RMM faz düzlemine çevrilmiş (x = PC2, y = −PC1); QBO için 30 ve 50 hPa aylık ekvator rüzgarı; ENSO için haftalık Niño 3.4 anomalisi ve ONI (NOAA CPC).

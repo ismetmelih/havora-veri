@@ -31,7 +31,7 @@ yayinla() {
 while :; do
   echo "::group::Tur $(date -u +%H:%MZ)"
   # Her model bitince hemen yayınla: biri uzun sürse ya da hata verse de diğerlerinin verisi beklemez
-  for m in gfs ecmwf icon; do
+  for m in gfs ecmwf icon ens; do
     python uret.py "$m" || echo "uret.py $m hata verdi; sonraki turda tekrar denenecek"
     yayinla
   done

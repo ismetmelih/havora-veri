@@ -90,6 +90,16 @@ FIELDS = {
     'v250': ('m/s', 0.1),
     'rh700': ('%', 1),       # 700 hPa bağıl nem
     'pwat': ('mm', 0.1),     # yağış suyu (atmosferdeki toplam su buharı)
+    # ECMWF ENS (51 üye): ortalama alanlar yukarıdaki adlarla, belirsizlik (standart sapma) ve olasılıklar
+    'z500s': ('m', 1),       # 500 hPa yükseklik belirsizliği
+    't850s': ('°C', 0.1),    # 850 hPa sıcaklık belirsizliği
+    'mslps': ('hPa', 0.1),   # yer basıncı belirsizliği
+    'p_tp1': ('%', 1),       # 24 saatte >1 mm yağış olasılığı
+    'p_tp10': ('%', 1),      # >10 mm
+    'p_tp25': ('%', 1),      # >25 mm
+    'p_c1': ('%', 1),        # 850 hPa sıcaklığın normalin 1 standart sapma altında olma olasılığı (soğuk)
+    'p_c2': ('%', 1),        # 2 standart sapma altında (çok soğuk)
+    'p_w1': ('%', 1),        # 1 standart sapma üstünde (sıcak)
 }
 # Yalnızca bazı bölgelerde yazılan alanlar (stratosfer haritaları kutup/dünya görünümü için)
 FIELD_REGIONS = {k: ('world',) for k in ('z50', 't50', 'z10', 't10', 'z30', 't30', 'z70', 't70', 'z100', 't100')}
@@ -101,7 +111,8 @@ KEEP = 4         # model başına saklanan koşu sayısı
 MIN_H = 12       # yeni koşu, ilk bu kadar saati hazır olunca yayınlanır (kalanı geldikçe eklenir)
 # Koşunun meta.json → series'inde olması gereken hesaplar; eksikse koşu yeniden işlenir
 SERIES_NEEDED = {'gfs': ('vt100', 'wave1_10', 'u60_prof'), 'ecmwf': ('vt100', 'wave1_10')}
-FIELDS_NEEDED = ('thk', 'ptype', 'ws250', 'rh700', 'pwat')   # eksikse koşu bir kez yeniden işlenir
+_NEW = ('thk', 'ptype', 'ws250', 'rh700', 'pwat')
+FIELDS_NEEDED = {'gfs': _NEW, 'ecmwf': _NEW, 'icon': _NEW}   # eksikse koşu bir kez yeniden işlenir
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'onbellek')   # indirilen ham adımlar (yayınlanmaz)
 KEEP_WORLD = 2   # dünya bölgesi (en büyük dosyalar) bu kadar yeni koşuda tutulur
 KLIMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'klima')
@@ -452,10 +463,10 @@ def is_cached(key):
     return os.path.exists(os.path.join(CACHE, key))
 
 
-def candidates(model, ready):
+def candidates(model, ready, hours=(0, 6, 12, 18)):
     """İşlenecek koşular: ilk MIN_H saati hazır en yeni koşu ve yarım yayınlanmış koşular (eskiden yeniye)"""
     runs = []
-    for t in recent_runs((0, 6, 12, 18)):
+    for t in recent_runs(hours):
         if ready(t, 0) and ready(t, MIN_H):
             runs.append(t)
             break
@@ -480,7 +491,7 @@ def progressive(model, run, want, ready, fetch, steps_filter):
     old = meta_of(model, rid)
     # Yeni hesaplar eklenince (ör. stratosfer kesitleri) eski biçimde yazılmış koşu bir kez yeniden işlenir
     stale = bool(old) and (any(k not in old.get('series', {}) for k in SERIES_NEEDED.get(model, ()))
-                           or any(k not in old.get('fields', {}) for k in FIELDS_NEEDED))
+                           or any(k not in old.get('fields', {}) for k in FIELDS_NEEDED.get(model, ())))
     if old and old.get('complete', True) and not steps_filter and not stale:
         log(model, 'yeni koşu yok', run)
         return None
@@ -729,6 +740,72 @@ def ecmwf_run(run, ready, steps_filter):
                                    'complete': complete, 'expected': want[-1]})
 
 
+# ---------------------------------------------------------------- ECMWF ENS (açık veri, hazır ürünler)
+# "ep" dosyaları: 51 üyenin ortalaması (em), standart sapması (es) ve olasılıklar (ep). İki parça: 0–240 ve 246–360 saat.
+
+ENS_PICK = {
+    ('em', 'gh', '500'): 'z500', ('es', 'gh', '500'): 'z500s', ('em', 'gh', '1000'): 'z1000',
+    ('em', 't', '850'): 't850', ('es', 't', '850'): 't850s', ('em', 'msl', None): 'mslp', ('es', 'msl', None): 'mslps',
+    ('ep', 'tpg1', None): 'p_tp1', ('ep', 'tpg10', None): 'p_tp10', ('ep', 'tpg25', None): 'p_tp25',
+    ('ep', 'ptsa_lt_1stdev', '850'): 'p_c1', ('ep', 'ptsa_lt_2stdev', '850'): 'p_c2', ('ep', 'ptsa_gt_1stdev', '850'): 'p_w1',
+}
+
+
+def ens_file(run, st):
+    part = 240 if st <= 240 else 360
+    return f'{ECMWF_BASE}/{run:%Y%m%d}/{run:%H}z/ifs/0p25/enfo/{run:%Y%m%d%H}0000-{part}h-enfo-ep'
+
+
+def ens(steps_filter=None):
+    def ready(run, st):
+        return exists(f'{ens_file(run, st)}.index')
+
+    for run in candidates('ens', ready, hours=(0, 12)):   # 15 günlük ensemble yalnızca 00Z ve 12Z
+        ens_run(run, ready, steps_filter)
+
+
+def ens_run(run, ready, steps_filter):
+    rid = f'{run:%Y%m%d%H}'
+    want = steps_filter or list(range(0, 361, 6))
+    f = {k: {} for k in set(ENS_PICK.values()) | {'thk'}}
+    indexes = {}
+
+    def records(st):
+        url = ens_file(run, st)
+        if url not in indexes:
+            indexes[url] = [json.loads(x) for x in get(f'{url}.index').decode().splitlines() if x.strip()]
+        out = []
+        for r in indexes[url]:
+            key = (r['type'], r['param'], r.get('levelist'))
+            if key not in ENS_PICK:
+                continue
+            # Ortalama/sapma ve sıcaklık olasılığı o saatte; yağış olasılığı o saatte biten 24 saat için
+            if r['step'] == str(st) or r['step'] == f'{st - 24}-{st}':
+                out.append((key, r))
+        return url, out
+
+    def fetch(st):
+        url, recs = records(st)
+        for key, r in recs:
+            def dl(r=r):
+                req = urllib.request.Request(f'{url}.grib2', headers={**UA, 'Range': f"bytes={r['_offset']}-{r['_offset'] + r['_length'] - 1}"})
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    return resp.read()
+            data = cached(f'ens/{rid}/{st}/{"_".join(x or "" for x in key)}', dl)
+            for _n, _lt, _lv, vals, lats, lons, _s in messages(data):
+                a = subset(vals, lats, lons)
+                name = ENS_PICK[key]
+                f[name][st] = a / 100 if name in ('mslp', 'mslps') else a - 273.15 if name == 't850' else a
+        derived(f, st)
+
+    res = progressive('ens', run, want, ready, fetch, steps_filter)
+    if not res:
+        return
+    steps, complete = res
+    write('ens', run, steps, f, {'name': 'ECMWF ENS', 'source': 'ECMWF açık veri, 51 üyeli ensemble (CC BY 4.0)', 'resolution': '0,25°',
+                                 'complete': complete, 'expected': want[-1]})
+
+
 # ---------------------------------------------------------------- ICON-EU (DWD)
 
 ICON_BASE = 'https://opendata.dwd.de/weather/nwp/icon-eu/grib'
@@ -842,7 +919,7 @@ def archive():
 def write_index():
     """index.json: her model için saklanan koşular, en yeni önce"""
     models_meta = {}
-    for m in ('gfs', 'ecmwf', 'icon'):
+    for m in ('gfs', 'ecmwf', 'icon', 'ens'):
         runs = []
         for r in runs_of(m):
             with open(os.path.join(OUT, m, r, 'meta.json'), encoding='utf-8') as mf:
@@ -865,7 +942,7 @@ def main():
         i = args.index('--steps')
         steps = [int(x) for x in args[i + 1].split(',')]
         args = args[:i] + args[i + 2:]
-    models = args or ['gfs', 'ecmwf', 'icon']
+    models = args or ['gfs', 'ecmwf', 'icon', 'ens']
     if not steps:
         try:
             endeksler(OUT, get, log)   # AO, NAO, PNA, AAO, MJO, QBO, ENSO
@@ -874,7 +951,7 @@ def main():
     failed = []
     for m in models:
         try:
-            {'gfs': gfs, 'ecmwf': ecmwf, 'icon': icon}[m](steps)
+            {'gfs': gfs, 'ecmwf': ecmwf, 'icon': icon, 'ens': ens}[m](steps)
         except Exception as e:  # noqa: BLE001 — bir model hata verirse diğerleri yine üretilsin
             log(m, 'HATA', repr(e))
             failed.append(m)
