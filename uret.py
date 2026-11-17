@@ -92,6 +92,8 @@ ARCHIVE_DAYS = 60   # geçmiş analiz arşivi (ECMWF 00Z/12Z başlangıç harita
 
 KEEP = 4         # model başına saklanan koşu sayısı
 MIN_H = 12       # yeni koşu, ilk bu kadar saati hazır olunca yayınlanır (kalanı geldikçe eklenir)
+# Koşunun meta.json → series'inde olması gereken hesaplar; eksikse koşu yeniden işlenir
+SERIES_NEEDED = {'gfs': ('vt100', 'wave1_10', 'u60_prof'), 'ecmwf': ('vt100', 'wave1_10')}
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'onbellek')   # indirilen ham adımlar (yayınlanmaz)
 KEEP_WORLD = 2   # dünya bölgesi (en büyük dosyalar) bu kadar yeni koşuda tutulur
 KLIMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'klima')
@@ -430,10 +432,12 @@ def progressive(model, run, want, ready, fetch, steps_filter):
     """Hazır adımları sırayla topla. Dönen: (adımlar, tamam mı) ya da yapılacak iş yoksa None"""
     rid = f'{run:%Y%m%d%H}'
     old = meta_of(model, rid)
-    if old and old.get('complete', True) and not steps_filter:
+    # Yeni hesaplar eklenince (ör. stratosfer kesitleri) eski biçimde yazılmış koşu bir kez yeniden işlenir
+    stale = bool(old) and any(k not in old.get('series', {}) for k in SERIES_NEEDED.get(model, ()))
+    if old and old.get('complete', True) and not steps_filter and not stale:
         log(model, 'yeni koşu yok', run)
         return None
-    had = len(old['regions']['tr']['steps']) if old else 0
+    had = 0 if stale else (len(old['regions']['tr']['steps']) if old else 0)
     got = []
     for st in want:
         if not is_cached(f'{model}/{rid}/{st}') and not ready(run, st):
