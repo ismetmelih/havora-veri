@@ -64,6 +64,17 @@ def teleconnection(get, name):
         if init == last and val not in ('', 'NaN'):
             members.setdefault(int(mem), []).append((int(lead), valid, float(val)))
     days = sorted({(lead, valid) for m in members.values() for lead, valid, _ in m})
+    # NOAA'nın grafiği gibi: CDAS gözlemi ~2 gün geriden gelir; sonraki günler GEFS'in o günkü başlangıç
+    # analizinden (0. saat, 31 üyenin ortalaması) eklenir. Böylece gözlem bugüne kadar uzanır.
+    lead0 = {}
+    for lead, mem, init, val, valid in ens:
+        if lead == '0' and val not in ('', 'NaN'):
+            lead0.setdefault(init, []).append(float(val))
+    cdas_last = obs[-1][0] if obs else ''
+    out['obs_cdas_until'] = cdas_last
+    for init in sorted(lead0):
+        if init > cdas_last:
+            obs.append((init, r2(sum(lead0[init]) / len(lead0[init]))))
     out['gefs'] = {
         'init': last,
         'valid': [v for _, v in days],
