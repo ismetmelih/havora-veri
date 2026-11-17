@@ -6,8 +6,10 @@ Kaynaklar NOAA CPC ve Avustralya Meteoroloji Bürosu (BoM); hepsi herkese açık
 import csv
 import datetime as dt
 import io
+import email.utils
 import json
 import math
+import urllib.request
 import os
 import re
 
@@ -25,7 +27,18 @@ QBO_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/qbo.{}.index'
 ONI_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt'
 NINO_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for'
 NAMES = ('ao', 'nao', 'pna', 'aao', 'mjo', 'qbo', 'enso')
-EVERY_H = 3   # kaynaklar günde bir kez güncellenir; daha sık indirmeye gerek yok
+EVERY_H = 1   # NOAA günde bir kez (~14:00 UTC) günceller; saatte bir bakınca en geç 1 saatte gelir
+
+
+def last_modified(url):
+    """Kaynak dosyanın sunucudaki son güncellenme zamanı (ISO, UTC); bilinmiyorsa None"""
+    try:
+        req = urllib.request.Request(url, method='HEAD', headers={'User-Agent': 'havora-veri/1.0 (+https://github.com/ismetmelih/havora-veri)'})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            lm = r.headers.get('Last-Modified')
+        return email.utils.parsedate_to_datetime(lm).strftime('%Y-%m-%dT%H:%MZ') if lm else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def r2(v):
@@ -39,9 +52,10 @@ def rows(text):
 def teleconnection(get, name):
     key, lev = TELE[name]
     start = '19790101' if name == 'aao' else '19500101'
-    obs = rows(get(f'{CPC}norm.daily.{key}.cdas.{lev}.{start}_current.csv').decode())[1:]
+    obs_url = f'{CPC}norm.daily.{key}.cdas.{lev}.{start}_current.csv'
+    obs = rows(get(obs_url).decode())[1:]
     obs = [(f'{int(y):04d}-{int(m):02d}-{int(d):02d}', r2(v)) for y, m, d, v in obs[-OBS_DAYS:] if v not in ('', 'NaN')]
-    out = {'obs': obs}
+    out = {'obs': obs, 'source_time': last_modified(obs_url)}
     # GEFS: 31 üye, 0–15 gün; en yeni başlangıç tarihi alınır
     ens = rows(get(f'{CPC}norm.daily.{key}.gefs.{lev}.120days.csv').decode())[1:]
     last = max(r[2] for r in ens)
@@ -74,7 +88,7 @@ def mjo(get):
             continue
         ph = int((math.degrees(math.atan2(yy, x)) + 180) // 45) % 8 + 1
         pts.append((f'{int(y):04d}-{int(m):02d}-{int(d):02d}', r2(x), r2(yy), ph, r2(amp)))
-    return {'points': pts[-120:]}
+    return {'points': pts[-120:], 'source_time': last_modified(MJO_URL)}
 
 
 def qbo(get):
@@ -96,6 +110,7 @@ def qbo(get):
                     if v > -999:
                         vals.append((f'{y:04d}-{mth:02d}-15', round(v, 1)))
         out[lev] = vals[-96:]   # son 8 yıl
+    out['source_time'] = last_modified(QBO_URL.format('u30'))
     return out
 
 
@@ -116,7 +131,7 @@ def enso(get):
         nums = re.findall(r'-?\d+\.\d', line[10:])
         if len(nums) == 8:
             weekly.append((d.isoformat(), float(nums[5])))
-    return {'oni': oni[-96:], 'nino34': weekly[-104:]}
+    return {'oni': oni[-96:], 'nino34': weekly[-104:], 'source_time': last_modified(NINO_URL)}
 
 
 def endeksler(out_dir, get, log):
