@@ -83,6 +83,8 @@ FIELD_REGIONS = {'z50': ('world',), 't50': ('world',), 'z10': ('world',), 't10':
 ARCHIVE_DAYS = 60   # geçmiş analiz arşivi (ECMWF 00Z/12Z başlangıç haritaları) kaç gün saklanır
 
 KEEP = 4         # model başına saklanan koşu sayısı
+MIN_H = 12       # yeni koşu, ilk bu kadar saati hazır olunca yayınlanır (kalanı geldikçe eklenir)
+CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'onbellek')   # indirilen ham adımlar (yayınlanmaz)
 KEEP_WORLD = 2   # dünya bölgesi (en büyük dosyalar) bu kadar yeni koşuda tutulur
 KLIMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'klima')
 
@@ -333,179 +335,295 @@ def standard_steps(maxh):
     return list(range(0, min(maxh, 120) + 1, 3)) + list(range(126, maxh + 1, 6))
 
 
+# ---------------------------------------------------------------- Kademeli üretim
+# Merkezler bir koşunun saatlerini sırayla yayınlar (GFS'in 16. günü başlangıçtan ~5 saat sonra çıkar).
+# Beklemek yerine ilk MIN_H saat hazır olunca koşu yayınlanır ("complete": false), sonraki turlarda
+# gelen saatler eklenir. İndirilen her adım CACHE'te saklanır; aynı adım iki kez indirilmez.
+
+def meta_of(model, rid):
+    path = os.path.join(OUT, model, rid, 'meta.json')
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding='utf-8') as fh:
+        return json.load(fh)
+
+
+def cached(key, fetch):
+    """Önbellekteki baytlar ya da fetch() ile indirilip önbelleğe yazılanlar"""
+    path = os.path.join(CACHE, key)
+    if os.path.exists(path):
+        with open(path, 'rb') as fh:
+            return fh.read()
+    data = fetch()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + '.tmp', 'wb') as fh:
+        fh.write(data)
+    os.replace(path + '.tmp', path)
+    return data
+
+
+def is_cached(key):
+    return os.path.exists(os.path.join(CACHE, key))
+
+
+def candidates(model, ready):
+    """İşlenecek koşular: ilk MIN_H saati hazır en yeni koşu ve yarım yayınlanmış koşular (eskiden yeniye)"""
+    runs = []
+    for t in recent_runs((0, 6, 12, 18)):
+        if ready(t, 0) and ready(t, MIN_H):
+            runs.append(t)
+            break
+    for rid in runs_of(model):
+        m = meta_of(model, rid)
+        if m and m.get('complete') is False:
+            runs.append(dt.datetime.strptime(rid, '%Y%m%d%H'))
+    runs = sorted(set(runs))
+    # Önbellekte artık işlenmeyecek koşuların adımlarını sil
+    cdir = os.path.join(CACHE, model)
+    keep = {f'{r:%Y%m%d%H}' for r in runs}
+    if os.path.isdir(cdir):
+        for x in os.listdir(cdir):
+            if x not in keep:
+                shutil.rmtree(os.path.join(cdir, x), ignore_errors=True)
+    return runs
+
+
+def progressive(model, run, want, ready, fetch, steps_filter):
+    """Hazır adımları sırayla topla. Dönen: (adımlar, tamam mı) ya da yapılacak iş yoksa None"""
+    rid = f'{run:%Y%m%d%H}'
+    old = meta_of(model, rid)
+    if old and old.get('complete', True) and not steps_filter:
+        log(model, 'yeni koşu yok', run)
+        return None
+    had = len(old['regions']['tr']['steps']) if old else 0
+    got = []
+    for st in want:
+        if not is_cached(f'{model}/{rid}/{st}') and not ready(run, st):
+            break   # sonraki adımlar henüz yayınlanmadı
+        try:
+            fetch(st)
+        except urllib.error.HTTPError as e:
+            log(model, run, st, 'adım alınamadı', e.code)
+            break
+        got.append(st)
+    tr_got = [x for x in got if x % REGIONS['tr']['every'] == 0]
+    if not got or (len(tr_got) <= had and not steps_filter):
+        log(model, run, 'yeni adım yok', f'({len(got)}/{len(want)})')
+        return None
+    log(model, run, f'{len(got)}/{len(want)} adım hazır')
+    return got, len(got) == len(want)
+
+
 # ---------------------------------------------------------------- GFS (NOAA)
 
+GFS_BASE = 'https://nomads.ncep.noaa.gov'
+
+
 def gfs(steps_filter=None):
-    base = 'https://nomads.ncep.noaa.gov'
-    run = None
-    for t in recent_runs((0, 6, 12, 18)):
-        d = f'gfs.{t:%Y%m%d}/{t:%H}/atmos'
-        if exists(f'{base}/pub/data/nccf/com/gfs/prod/{d}/gfs.t{t:%H}z.pgrb2.0p25.f384'):
-            run = t
-            break
-    if run is None:
-        return log('GFS: tamamlanmış koşu bulunamadı')
-    if published('gfs', run) and not steps_filter:
-        return log('GFS: yeni koşu yok', run)
-    steps = steps_filter or standard_steps(384)
-    log('GFS', run, len(steps), 'adım indiriliyor')
+    def ready(run, st):
+        d = f'gfs.{run:%Y%m%d}/{run:%H}/atmos'
+        return exists(f'{GFS_BASE}/pub/data/nccf/com/gfs/prod/{d}/gfs.t{run:%H}z.pgrb2.0p25.f{st:03d}.idx')
+
+    for run in candidates('gfs', ready):
+        gfs_run(run, ready, steps_filter)
+
+
+def gfs_run(run, ready, steps_filter):
+    rid = f'{run:%Y%m%d%H}'
+    want = steps_filter or standard_steps(384)
     f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'frz', 'z50', 't50', 'z10', 't10', 'u10')}
     apcp, csnow = {}, {}
-    for s in steps:
-        q = (f'dir=%2Fgfs.{run:%Y%m%d}%2F{run:%H}%2Fatmos&file=gfs.t{run:%H}z.pgrb2.0p25.f{s:03d}'
+
+    def fetch(st):
+        q = (f'dir=%2Fgfs.{run:%Y%m%d}%2F{run:%H}%2Fatmos&file=gfs.t{run:%H}z.pgrb2.0p25.f{st:03d}'
              '&var_TMP=on&var_HGT=on&var_PRMSL=on&var_APCP=on&var_CSNOW=on&var_GUST=on&var_SNOD=on&var_UGRD=on'
              '&lev_850_mb=on&lev_500_mb=on&lev_50_mb=on&lev_10_mb=on&lev_mean_sea_level=on&lev_surface=on'
              '&lev_2_m_above_ground=on&lev_0C_isotherm=on'
              f'&subregion=&toplat={BOX_N}&leftlon={BOX_W}&rightlon={BOX_E}&bottomlat={BOX_S}')
-        data = get(f'{base}/cgi-bin/filter_gfs_0p25.pl?{q}')
-        for name, ltype, lev, vals, lats, lons, start in messages(data):
+
+        def dl():
+            time.sleep(0.6)  # NOMADS'a nazik ol (dakikada en fazla ~120 istek)
+            return get(f'{GFS_BASE}/cgi-bin/filter_gfs_0p25.pl?{q}')
+        for name, ltype, lev, vals, lats, lons, start in messages(cached(f'gfs/{rid}/{st}', dl)):
             a = subset(vals, lats, lons)
             if name == 't' and lev == 850 and ltype == 'isobaricInhPa':
-                f['t850'][s] = a - 273.15
+                f['t850'][st] = a - 273.15
             elif name == 't' and lev == 500 and ltype == 'isobaricInhPa':
-                f['t500'][s] = a - 273.15
+                f['t500'][st] = a - 273.15
             elif name == 't' and lev in (50, 10) and ltype == 'isobaricInhPa':
-                f[f't{lev}'][s] = a - 273.15
+                f[f't{lev}'][st] = a - 273.15
             elif name == 'gh' and ltype == 'isothermZero':
-                f['frz'][s] = a
+                f['frz'][st] = a
             elif name == 'gh' and ltype == 'isobaricInhPa' and lev in (850, 500, 50, 10):
-                f[f'z{lev}'][s] = a
+                f[f'z{lev}'][st] = a
             elif name == 'u' and lev == 10 and ltype == 'isobaricInhPa':
-                f['u10'][s] = a
+                f['u10'][st] = a
             elif name == 'sde':
-                f['sdep'][s] = a * 100       # m → cm
+                f['sdep'][st] = a * 100       # m → cm
             elif name == 'prmsl':
-                f['mslp'][s] = a / 100
+                f['mslp'][st] = a / 100
             elif name == '2t':
-                f['t2m'][s] = a - 273.15
+                f['t2m'][st] = a - 273.15
             elif name == 'gust':
-                f['gust'][s] = a * 3.6
+                f['gust'][st] = a * 3.6
             elif name == 'tp' and start == 0:
-                apcp[s] = a  # koşu başından beri toplam (dosyada bir de 6 saatlik kova var, o atlanır)
+                apcp[st] = a  # koşu başından beri toplam (dosyada bir de 6 saatlik kova var, o atlanır)
             elif name == 'csnow':
-                csnow[s] = a
-        time.sleep(0.6)  # NOMADS'a nazik ol (dakikada en fazla ~120 istek)
+                csnow[st] = a
+
+    res = progressive('gfs', run, want, ready, fetch, steps_filter)
+    if not res:
+        return
+    steps, complete = res
     zero = np.zeros(NPTS)
     cum, cum_snow, prev = {0: zero}, {0: zero}, 0
-    for s in sorted(steps)[1:]:
-        if s not in apcp or prev not in cum:
+    for st in sorted(steps)[1:]:
+        if st not in apcp or prev not in cum:
             continue
-        cum[s] = apcp[s]
+        cum[st] = apcp[st]
         # Kar: önceki adımdan bu yana yağışı, adım anındaki "kar yağıyor" bayrağıyla say (yaklaşık)
-        cum_snow[s] = cum_snow[prev] + np.maximum(apcp[s] - cum[prev], 0) * csnow.get(s, 0)
-        prev = s
+        cum_snow[st] = cum_snow[prev] + np.maximum(apcp[st] - cum[prev], 0) * csnow.get(st, 0)
+        prev = st
     accumulations(f, steps, cum, cum_snow)
-    write('gfs', run, steps, f, {'name': 'GFS', 'source': 'NOAA NCEP', 'resolution': '0,25°'})
+    write('gfs', run, steps, f, {'name': 'GFS', 'source': 'NOAA NCEP', 'resolution': '0,25°', 'complete': complete, 'expected': want[-1]})
 
 
 # ---------------------------------------------------------------- ECMWF (açık veri)
 
+ECMWF_BASE = 'https://data.ecmwf.int/forecasts'
+
+
+def ecmwf_stem(run, st):
+    return f'{ECMWF_BASE}/{run:%Y%m%d}/{run:%H}z/ifs/0p25/oper/{run:%Y%m%d%H}0000-{st}h-oper-fc'
+
+
 def ecmwf(steps_filter=None):
-    base = 'https://data.ecmwf.int/forecasts'
-    run = None
-    for t in recent_runs((0, 6, 12, 18)):
-        maxh = 360 if t.hour in (0, 12) else 144  # 06/18 koşuları 6 gün
-        stream = 'oper'
-        if exists(f'{base}/{t:%Y%m%d}/{t:%H}z/ifs/0p25/{stream}/{t:%Y%m%d%H}0000-{maxh}h-{stream}-fc.index'):
-            run = t
-            break
-    if run is None:
-        return log('ECMWF: tamamlanmış koşu bulunamadı')
-    if published('ecmwf', run) and not steps_filter:
-        return log('ECMWF: yeni koşu yok', run)
-    steps = steps_filter or standard_steps(maxh)
-    log('ECMWF', run, len(steps), 'adım indiriliyor')
-    want = {('t', '850'), ('t', '500'), ('gh', '850'), ('gh', '500'), ('msl', None), ('2t', None), ('10fg', None), ('tp', None), ('sf', None),
-            ('t', '50'), ('gh', '50'), ('t', '10'), ('gh', '10'), ('u', '10'), ('sd', None), ('rsn', None)}
+    def ready(run, st):
+        return exists(f'{ecmwf_stem(run, st)}.index')
+
+    for run in candidates('ecmwf', ready):
+        ecmwf_run(run, ready, steps_filter)
+
+
+def ecmwf_run(run, ready, steps_filter):
+    rid = f'{run:%Y%m%d%H}'
+    maxh = 360 if run.hour in (0, 12) else 144  # 06/18 koşuları 6 gün
+    want = steps_filter or standard_steps(maxh)
+    params = {('t', '850'), ('t', '500'), ('gh', '850'), ('gh', '500'), ('msl', None), ('2t', None), ('10fg', None), ('tp', None), ('sf', None),
+              ('t', '50'), ('gh', '50'), ('t', '10'), ('gh', '10'), ('u', '10'), ('sd', None), ('rsn', None)}
     f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'z50', 't50', 'z10', 't10', 'u10')}
     swe, rho = {}, {}
     tp, sf = {}, {}
-    for s in steps:
-        stem = f'{base}/{run:%Y%m%d}/{run:%H}z/ifs/0p25/{stream}/{run:%Y%m%d%H}0000-{s}h-{stream}-fc'
-        index = [json.loads(line) for line in get(f'{stem}.index').decode().splitlines() if line.strip()]
-        parts = [r for r in index if (r['param'], r.get('levelist')) in want]
-        chunks = []
-        for r in parts:  # yalnızca gereken mesajları bayt aralığıyla indir
-            req = urllib.request.Request(f'{stem}.grib2', headers={**UA, 'Range': f"bytes={r['_offset']}-{r['_offset'] + r['_length'] - 1}"})
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                chunks.append(resp.read())
-        for name, ltype, lev, vals, lats, lons, _ in messages(b''.join(chunks)):
+
+    def fetch(st):
+        stem = ecmwf_stem(run, st)
+
+        def dl():
+            index = [json.loads(line) for line in get(f'{stem}.index').decode().splitlines() if line.strip()]
+            chunks = []
+            for r in index:  # yalnızca gereken mesajları bayt aralığıyla indir
+                if (r['param'], r.get('levelist')) not in params:
+                    continue
+                req = urllib.request.Request(f'{stem}.grib2', headers={**UA, 'Range': f"bytes={r['_offset']}-{r['_offset'] + r['_length'] - 1}"})
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    chunks.append(resp.read())
+            return b''.join(chunks)
+        for name, ltype, lev, vals, lats, lons, _ in messages(cached(f'ecmwf/{rid}/{st}', dl)):
             a = subset(vals, lats, lons)
             if name == 't' and lev in (850, 500, 50, 10):
-                f[f't{lev}'][s] = a - 273.15
+                f[f't{lev}'][st] = a - 273.15
             elif name == 'gh' and lev in (850, 500, 50, 10):
-                f[f'z{lev}'][s] = a
+                f[f'z{lev}'][st] = a
             elif name == 'u' and lev == 10:
-                f['u10'][s] = a
+                f['u10'][st] = a
             elif name == 'sd':
-                swe[s] = a                # kar su eşdeğeri (m)
+                swe[st] = a                # kar su eşdeğeri (m)
             elif name == 'rsn':
-                rho[s] = a                # kar yoğunluğu (kg/m³)
+                rho[st] = a                # kar yoğunluğu (kg/m³)
             elif name == 'msl':
-                f['mslp'][s] = a / 100
+                f['mslp'][st] = a / 100
             elif name == '2t':
-                f['t2m'][s] = a - 273.15
+                f['t2m'][st] = a - 273.15
             elif name == '10fg':
-                f['gust'][s] = a * 3.6
+                f['gust'][st] = a * 3.6
             elif name == 'tp':
-                tp[s] = a * 1000          # m → mm
+                tp[st] = a * 1000          # m → mm
             elif name == 'sf':
-                sf[s] = a * 1000          # m su eşdeğeri → mm ≈ cm kar (10:1)
+                sf[st] = a * 1000          # m su eşdeğeri → mm ≈ cm kar (10:1)
+
+    res = progressive('ecmwf', run, want, ready, fetch, steps_filter)
+    if not res:
+        return
+    steps, complete = res
     tp.setdefault(0, np.zeros(NPTS))
     sf.setdefault(0, np.zeros(NPTS))
-    for s in swe:
-        if s in rho:
-            f['sdep'][s] = np.where(rho[s] > 0, swe[s] * 1000 / np.maximum(rho[s], 50) * 100, 0)  # cm
+    for st in swe:
+        if st in rho:
+            f['sdep'][st] = np.where(rho[st] > 0, swe[st] * 1000 / np.maximum(rho[st], 50) * 100, 0)  # cm
     accumulations(f, steps, tp, sf)
-    write('ecmwf', run, steps, f, {'name': 'ECMWF', 'source': 'ECMWF açık veri (CC BY 4.0)', 'resolution': '0,25°'})
+    write('ecmwf', run, steps, f, {'name': 'ECMWF', 'source': 'ECMWF açık veri (CC BY 4.0)', 'resolution': '0,25°',
+                                   'complete': complete, 'expected': want[-1]})
 
 
 # ---------------------------------------------------------------- ICON-EU (DWD)
 
+ICON_BASE = 'https://opendata.dwd.de/weather/nwp/icon-eu/grib'
+# Her adımda indirilen değişkenler: (değişken, seviye); 0. saatte birikimli olanlar yok
+ICON_VARS = [('t', 850), ('t', 500), ('fi', 850), ('fi', 500), ('pmsl', None), ('t_2m', None), ('h_snow', None), ('hzerocl', None)]
+ICON_ACC = [('vmax_10m', None), ('tot_prec', None), ('snow_gsp', None), ('snow_con', None)]
+
+
+def icon_url(run, var, st, level=None):
+    kind = 'pressure-level' if level else 'single-level'
+    lv = f'_{level}' if level else ''
+    return f'{ICON_BASE}/{run:%H}/{var.lower()}/icon-eu_europe_regular-lat-lon_{kind}_{run:%Y%m%d%H}_{st:03d}{lv}_{var.upper()}.grib2.bz2'
+
+
 def icon(steps_filter=None):
-    base = 'https://opendata.dwd.de/weather/nwp/icon-eu/grib'
-    run = None
-    for t in recent_runs((0, 6, 12, 18)):
-        name = f'icon-eu_europe_regular-lat-lon_single-level_{t:%Y%m%d%H}_120_T_2M.grib2.bz2'
-        if exists(f'{base}/{t:%H}/t_2m/{name}'):
-            run = t
-            break
-    if run is None:
-        return log('ICON: tamamlanmış koşu bulunamadı')
-    if published('icon', run) and not steps_filter:
-        return log('ICON: yeni koşu yok', run)
-    steps = steps_filter or list(range(0, 121, 3))
-    log('ICON', run, len(steps), 'adım indiriliyor')
-    r = f'{run:%Y%m%d%H}'
+    def ready(run, st):
+        # Adımın bütün değişkenleri yayınlanmış mı (DWD her değişkeni ayrı dosya olarak koyar)
+        return all(exists(icon_url(run, v, st, lv)) for v, lv in ICON_VARS + (ICON_ACC if st else []))
 
-    def grab(var, s, level=None):
-        kind = 'pressure-level' if level else 'single-level'
-        lv = f'_{level}' if level else ''
-        url = f'{base}/{run:%H}/{var.lower()}/icon-eu_europe_regular-lat-lon_{kind}_{r}_{s:03d}{lv}_{var.upper()}.grib2.bz2'
-        for _, _, _, vals, lats, lons, _ in messages(bz2.decompress(get(url))):
-            return subset(vals, lats, lons)
-        return None
+    for run in candidates('icon', ready):
+        icon_run(run, ready, steps_filter)
 
+
+def icon_run(run, ready, steps_filter):
+    rid = f'{run:%Y%m%d%H}'
+    want = steps_filter or list(range(0, 121, 3))
     g = 9.80665
     f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'frz')}
     prec, snow = {}, {}
-    for s in steps:
-        f['t850'][s] = grab('t', s, 850) - 273.15
-        f['t500'][s] = grab('t', s, 500) - 273.15
-        f['z850'][s] = grab('fi', s, 850) / g
-        f['z500'][s] = grab('fi', s, 500) / g
-        f['mslp'][s] = grab('pmsl', s) / 100
-        f['t2m'][s] = grab('t_2m', s) - 273.15
-        f['sdep'][s] = grab('h_snow', s) * 100
-        f['frz'][s] = grab('hzerocl', s)
-        if s > 0:
-            f['gust'][s] = grab('vmax_10m', s) * 3.6
-            prec[s] = grab('tot_prec', s)
-            snow[s] = grab('snow_gsp', s) + grab('snow_con', s)
+
+    def grab(var, st, level=None):
+        data = cached(f'icon/{rid}/{st}/{var}{level or ""}', lambda: get(icon_url(run, var, st, level)))
+        for _, _, _, vals, lats, lons, _ in messages(bz2.decompress(data)):
+            return subset(vals, lats, lons)
+        return None
+
+    def fetch(st):
+        row = {
+            't850': grab('t', st, 850) - 273.15, 't500': grab('t', st, 500) - 273.15,
+            'z850': grab('fi', st, 850) / g, 'z500': grab('fi', st, 500) / g,
+            'mslp': grab('pmsl', st) / 100, 't2m': grab('t_2m', st) - 273.15,
+            'sdep': grab('h_snow', st) * 100, 'frz': grab('hzerocl', st),
+        }
+        if st > 0:
+            row['gust'] = grab('vmax_10m', st) * 3.6
+            prec[st] = grab('tot_prec', st)
+            snow[st] = grab('snow_gsp', st) + grab('snow_con', st)
+        for k, v in row.items():
+            f[k][st] = v
+
+    res = progressive('icon', run, want, ready, fetch, steps_filter)
+    if not res:
+        return
+    steps, complete = res
     prec[0] = np.zeros(NPTS)
     snow[0] = np.zeros(NPTS)
     accumulations(f, steps, prec, snow)
-    write('icon', run, steps, f, {'name': 'ICON', 'source': 'DWD açık veri', 'resolution': '0,0625° → 0,25°', 'coverage': '29,5–70,5°K, 23,5°B–62,5°D'}, regions=('tr', 'eu'))  # ICON-EU dünyayı kapsamaz
+    write('icon', run, steps, f, {'name': 'ICON', 'source': 'DWD açık veri', 'resolution': '0,0625° → 0,25°', 'coverage': '29,5–70,5°K, 23,5°B–62,5°D',
+                                  'complete': complete, 'expected': want[-1]}, regions=('tr', 'eu'))  # ICON-EU dünyayı kapsamaz
 
 
 # ---------------------------------------------------------------- Geçmiş analiz arşivi
@@ -559,7 +677,8 @@ def write_index():
             with open(os.path.join(OUT, m, r, 'meta.json'), encoding='utf-8') as mf:
                 mm = json.load(mf)
             runs.append({'id': r, 'run': mm['run'], 'generated': mm['generated'],
-                         'hours': mm['regions']['tr']['steps'][-1], 'regions': list(mm['regions'])})
+                         'hours': mm['regions']['tr']['steps'][-1], 'regions': list(mm['regions']),
+                         'complete': mm.get('complete', True), 'expected': mm.get('expected')})
         if runs:
             models_meta[m] = {'runs': runs}
     arsiv = [{'id': r, 'run': f'{r[:4]}-{r[4:6]}-{r[6:8]}T{r[8:]}:00Z'} for r in runs_in(os.path.join(OUT, 'arsiv'))]

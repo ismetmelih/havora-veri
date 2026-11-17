@@ -24,6 +24,7 @@ MJO_URL = 'https://psl.noaa.gov/mjo/mjoindex/romi.cpcolr.1x.txt'
 QBO_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/qbo.{}.index'
 ONI_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt'
 NINO_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for'
+NAMES = ('ao', 'nao', 'pna', 'aao', 'mjo', 'qbo', 'enso')
 EVERY_H = 3   # kaynaklar günde bir kez güncellenir; daha sık indirmeye gerek yok
 
 
@@ -126,7 +127,8 @@ def endeksler(out_dir, get, log):
             old = json.load(fh)
         try:
             age = dt.datetime.utcnow() - dt.datetime.strptime(old['generated'], '%Y-%m-%dT%H:%MZ')
-            if age < dt.timedelta(hours=EVERY_H):
+            # Bir gösterge eksikse (kaynak o an yanıt vermediyse) beklemeden bir sonraki turda tekrar dene
+            if age < dt.timedelta(hours=EVERY_H) and all(k in old for k in NAMES):
                 log('göstergeler güncel')
                 return
         except (KeyError, ValueError):

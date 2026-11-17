@@ -13,7 +13,8 @@ git clone -q --depth 1 --branch gh-pages "https://github.com/${GITHUB_REPOSITORY
 yayinla() {
   (
     cd out || exit 0
-    if [ -d .git ] && [ -z "$(git status --porcelain -- '*/meta.json')" ]; then
+    # -uall: yeni klasördeki dosyalar da (ör. ilk kez yazılan endeks/meta.json) tek tek görünsün
+    if [ -d .git ] && [ -z "$(git status --porcelain -uall -- '*/meta.json')" ]; then
       echo "Yeni veri yok"; exit 0
     fi
     rm -rf .git
@@ -29,8 +30,11 @@ yayinla() {
 
 while :; do
   echo "::group::Tur $(date -u +%H:%MZ)"
-  python uret.py || echo "uret.py hata verdi; sonraki turda tekrar denenecek"
-  yayinla
+  # Her model bitince hemen yayınla: biri uzun sürse ya da hata verse de diğerlerinin verisi beklemez
+  for m in gfs ecmwf icon; do
+    python uret.py "$m" || echo "uret.py $m hata verdi; sonraki turda tekrar denenecek"
+    yayinla
+  done
   echo "::endgroup::"
   simdi=$(date +%s)
   if [ $(( simdi + BEKLE_SN + TUR_DK * 60 )) -gt "$son" ]; then break; fi
