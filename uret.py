@@ -77,9 +77,17 @@ FIELDS = {
     't50': ('°C', 0.1),      # 50 hPa sıcaklık
     'z10': ('m', 2),         # 10 hPa yükseklik (kutup girdabı)
     't10': ('°C', 0.1),      # 10 hPa sıcaklık
+    'z30': ('m', 1),         # 30 hPa yükseklik (yalnızca GFS)
+    't30': ('°C', 0.1),
+    'z70': ('m', 1),         # 70 hPa yükseklik (yalnızca GFS)
+    't70': ('°C', 0.1),
+    'z100': ('m', 1),        # 100 hPa yükseklik (tropopoz civarı)
+    't100': ('°C', 0.1),
 }
 # Yalnızca bazı bölgelerde yazılan alanlar (stratosfer haritaları kutup/dünya görünümü için)
-FIELD_REGIONS = {'z50': ('world',), 't50': ('world',), 'z10': ('world',), 't10': ('world',)}
+FIELD_REGIONS = {k: ('world',) for k in ('z50', 't50', 'z10', 't10', 'z30', 't30', 'z70', 't70', 'z100', 't100')}
+# GFS stratosfer kesitleri için seviyeler (hPa; 1° ayrı paket, 20°K kuzeyi)
+PROF_LEVELS = [1, 2, 3, 5, 7, 10, 20, 30, 50, 70, 100, 150, 200, 250, 300, 500, 700, 850, 1000]
 ARCHIVE_DAYS = 60   # geçmiş analiz arşivi (ECMWF 00Z/12Z başlangıç haritaları) kaç gün saklanır
 
 KEEP = 4         # model başına saklanan koşu sayısı
@@ -216,12 +224,42 @@ def add_anomaly(f, run):
             f[f'{var}a'] = {s: z - clim.at(run + dt.timedelta(hours=s)) for s, z in f[var].items()}
 
 
-def strat_series(f, steps):
-    """Kutup girdabı: 60°K'de 10 hPa kuşak ortalaması batı rüzgarı (m/s) ve 60–90°K ortalama 10 hPa sıcaklığı (°C)"""
+def heat_flux(v, t, lats):
+    """Kuşak ortalaması girdap ısı akısı [v'T'] (K·m/s), 45–75°K kosinüs ağırlıklı ortalama.
+    v, t: (enlem, boylam) ızgaraları. Pozitif ve büyükse girdaba yukarı doğru güçlü dalga enerjisi gidiyor demektir."""
+    band = (lats >= 45) & (lats <= 75)
+    vp = v[band] - np.nanmean(v[band], axis=1, keepdims=True)
+    tp = t[band] - np.nanmean(t[band], axis=1, keepdims=True)
+    w = np.cos(np.radians(lats[band]))
+    return round(float(np.nansum(np.nanmean(vp * tp, axis=1) * w) / w.sum()), 2)
+
+
+def wave_amps(z, lats):
+    """60°K'de yüksekliğin dalga-1 ve dalga-2 genliği (m): dalga-1 girdabın kaymasını, dalga-2 bölünmesini gösterir"""
+    row = z[np.argmin(np.abs(lats - 60))]
+    c = np.fft.rfft(row - row.mean())
+    return [round(float(2 * abs(c[k]) / len(row)), 0) for k in (1, 2)]
+
+
+def strat_series(f, steps, diag=None):
+    """Kutup girdabı: 60°K'de 10 hPa kuşak ortalaması batı rüzgarı (m/s) ve 60–90°K ortalama 10 hPa sıcaklığı (°C);
+    10 hPa dalga-1/2 genliği, 100 hPa ısı akısı; diag varsa (GFS) seviye seviye 60°K rüzgarı ve kutup sıcaklığı"""
     w = REGIONS['world']
     n = w['ny'] * w['nx']
     lats = w['lats']
-    out = {'u60_10': [], 'tpolar_10': []}
+    grid = lambda a: a[w['off']:w['off'] + n].reshape(w['ny'], w['nx'])  # noqa: E731
+    out = {'u60_10': [], 'tpolar_10': [], 'wave1_10': [], 'wave2_10': [], 'vt100': []}
+    for s in steps:
+        z = f.get('z10', {}).get(s)
+        a1, a2 = wave_amps(grid(z), lats) if z is not None else (None, None)
+        out['wave1_10'].append(a1)
+        out['wave2_10'].append(a2)
+        v, t = f.get('v100', {}).get(s), f.get('t100', {}).get(s)
+        out['vt100'].append(heat_flux(grid(v), grid(t), lats) if v is not None and t is not None else (diag or {}).get(s, {}).get('vt100'))
+    if diag:
+        out['prof_levels'] = PROF_LEVELS
+        out['u60_prof'] = [diag.get(s, {}).get('u60') for s in steps]
+        out['tcap_prof'] = [diag.get(s, {}).get('tcap') for s in steps]
     cap = lats >= 60
     weights = np.cos(np.radians(lats[cap]))
     for s in steps:
@@ -237,10 +275,10 @@ def strat_series(f, steps):
     return out
 
 
-def write(model, run, steps, fields, extra=None, regions=tuple(REGIONS), base=None, keep=True):
+def write(model, run, steps, fields, extra=None, regions=tuple(REGIONS), base=None, keep=True, diag=None):
     add_anomaly(fields, run)
     if fields.get('u10') and fields.get('t10'):
-        extra = {**(extra or {}), 'series': {'steps': steps, **strat_series(fields, steps)}}
+        extra = {**(extra or {}), 'series': {'steps': steps, **strat_series(fields, steps, diag)}}
     d = os.path.join(base or os.path.join(OUT, model), f'{run:%Y%m%d%H}')
     os.makedirs(d, exist_ok=True)
     meta = {
@@ -431,13 +469,42 @@ def gfs(steps_filter=None):
 def gfs_run(run, ready, steps_filter):
     rid = f'{run:%Y%m%d%H}'
     want = steps_filter or standard_steps(384)
-    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'frz', 'z50', 't50', 'z10', 't10', 'u10')}
+    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'frz', 'z50', 't50', 'z10', 't10', 'u10',
+                         'z30', 't30', 'z70', 't70', 'z100', 't100')}
     apcp, csnow = {}, {}
+    diag = {}
+
+    def fetch_prof(st):
+        """1° ayrı paket (20–90°K): 19 seviyede u ve T, 100 hPa'da v → 60°K rüzgar profili, kutup sıcaklık profili, ısı akısı"""
+        lev = ''.join(f'&lev_{x}_mb=on' for x in PROF_LEVELS)
+        q = (f'dir=%2Fgfs.{run:%Y%m%d}%2F{run:%H}%2Fatmos&file=gfs.t{run:%H}z.pgrb2.1p00.f{st:03d}'
+             f'&var_UGRD=on&var_VGRD=on&var_TMP=on{lev}&subregion=&toplat=90&leftlon=0&rightlon=359&bottomlat=20')
+
+        def dl():
+            time.sleep(0.6)
+            return get(f'{GFS_BASE}/cgi-bin/filter_gfs_1p00.pl?{q}')
+        u, t, v = {}, {}, {}
+        lats = None
+        for name, ltype, lv, vals, la, _lo, _ in messages(cached(f'gfs/{rid}/{st}.p1', dl)):
+            if ltype != 'isobaricInhPa':
+                continue
+            lats = la   # messages(): değerler (enlem, boylam) ızgarası, la satırların enlemleri
+            {'u': u, 't': t, 'v': v}.get(name, {})[int(lv)] = vals
+        if lats is None:
+            return
+        cap = lats >= 60
+        wcap = np.cos(np.radians(lats[cap]))
+        r60 = int(np.argmin(np.abs(lats - 60)))
+        diag[st] = {
+            'u60': [round(float(np.nanmean(u[x][r60])), 1) if x in u else None for x in PROF_LEVELS],
+            'tcap': [round(float(np.nansum(np.nanmean(t[x][cap], axis=1) * wcap) / wcap.sum()) - 273.15, 1) if x in t else None for x in PROF_LEVELS],
+            'vt100': heat_flux(v[100], t[100], lats) if 100 in v and 100 in t else None,
+        }
 
     def fetch(st):
         q = (f'dir=%2Fgfs.{run:%Y%m%d}%2F{run:%H}%2Fatmos&file=gfs.t{run:%H}z.pgrb2.0p25.f{st:03d}'
              '&var_TMP=on&var_HGT=on&var_PRMSL=on&var_APCP=on&var_CSNOW=on&var_GUST=on&var_SNOD=on&var_UGRD=on'
-             '&lev_850_mb=on&lev_500_mb=on&lev_50_mb=on&lev_10_mb=on&lev_mean_sea_level=on&lev_surface=on'
+             '&lev_850_mb=on&lev_500_mb=on&lev_100_mb=on&lev_70_mb=on&lev_50_mb=on&lev_30_mb=on&lev_10_mb=on&lev_mean_sea_level=on&lev_surface=on'
              '&lev_2_m_above_ground=on&lev_0C_isotherm=on'
              f'&subregion=&toplat={BOX_N}&leftlon={BOX_W}&rightlon={BOX_E}&bottomlat={BOX_S}')
 
@@ -450,11 +517,11 @@ def gfs_run(run, ready, steps_filter):
                 f['t850'][st] = a - 273.15
             elif name == 't' and lev == 500 and ltype == 'isobaricInhPa':
                 f['t500'][st] = a - 273.15
-            elif name == 't' and lev in (50, 10) and ltype == 'isobaricInhPa':
+            elif name == 't' and lev in (100, 70, 50, 30, 10) and ltype == 'isobaricInhPa':
                 f[f't{lev}'][st] = a - 273.15
             elif name == 'gh' and ltype == 'isothermZero':
                 f['frz'][st] = a
-            elif name == 'gh' and ltype == 'isobaricInhPa' and lev in (850, 500, 50, 10):
+            elif name == 'gh' and ltype == 'isobaricInhPa' and lev in (850, 500, 100, 70, 50, 30, 10):
                 f[f'z{lev}'][st] = a
             elif name == 'u' and lev == 10 and ltype == 'isobaricInhPa':
                 f['u10'][st] = a
@@ -470,6 +537,10 @@ def gfs_run(run, ready, steps_filter):
                 apcp[st] = a  # koşu başından beri toplam (dosyada bir de 6 saatlik kova var, o atlanır)
             elif name == 'csnow':
                 csnow[st] = a
+        try:
+            fetch_prof(st)
+        except Exception as e:  # noqa: BLE001 — kesit paketi gelmezse harita verisi yine yayınlansın
+            log('GFS kesit paketi alınamadı', st, repr(e))
 
     res = progressive('gfs', run, want, ready, fetch, steps_filter)
     if not res:
@@ -485,7 +556,7 @@ def gfs_run(run, ready, steps_filter):
         cum_snow[st] = cum_snow[prev] + np.maximum(apcp[st] - cum[prev], 0) * csnow.get(st, 0)
         prev = st
     accumulations(f, steps, cum, cum_snow)
-    write('gfs', run, steps, f, {'name': 'GFS', 'source': 'NOAA NCEP', 'resolution': '0,25°', 'complete': complete, 'expected': want[-1]})
+    write('gfs', run, steps, f, {'name': 'GFS', 'source': 'NOAA NCEP', 'resolution': '0,25°', 'complete': complete, 'expected': want[-1]}, diag=diag)
 
 
 # ---------------------------------------------------------------- ECMWF (açık veri)
@@ -510,8 +581,9 @@ def ecmwf_run(run, ready, steps_filter):
     maxh = 360 if run.hour in (0, 12) else 144  # 06/18 koşuları 6 gün
     want = steps_filter or standard_steps(maxh)
     params = {('t', '850'), ('t', '500'), ('gh', '850'), ('gh', '500'), ('msl', None), ('2t', None), ('10fg', None), ('tp', None), ('sf', None),
-              ('t', '50'), ('gh', '50'), ('t', '10'), ('gh', '10'), ('u', '10'), ('sd', None), ('rsn', None)}
-    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'z50', 't50', 'z10', 't10', 'u10')}
+              ('t', '50'), ('gh', '50'), ('t', '10'), ('gh', '10'), ('u', '10'), ('sd', None), ('rsn', None),
+              ('t', '100'), ('gh', '100'), ('v', '100')}
+    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'z50', 't50', 'z10', 't10', 'u10', 'z100', 't100', 'v100')}
     swe, rho = {}, {}
     tp, sf = {}, {}
 
@@ -530,12 +602,14 @@ def ecmwf_run(run, ready, steps_filter):
             return b''.join(chunks)
         for name, ltype, lev, vals, lats, lons, _ in messages(cached(f'ecmwf/{rid}/{st}', dl)):
             a = subset(vals, lats, lons)
-            if name == 't' and lev in (850, 500, 50, 10):
+            if name == 't' and lev in (850, 500, 100, 50, 10):
                 f[f't{lev}'][st] = a - 273.15
-            elif name == 'gh' and lev in (850, 500, 50, 10):
+            elif name == 'gh' and lev in (850, 500, 100, 50, 10):
                 f[f'z{lev}'][st] = a
             elif name == 'u' and lev == 10:
                 f['u10'][st] = a
+            elif name == 'v' and lev == 100:
+                f['v100'][st] = a
             elif name == 'sd':
                 swe[st] = a                # kar su eşdeğeri (m)
             elif name == 'rsn':
