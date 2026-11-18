@@ -10,6 +10,14 @@ son=$(( $(date +%s) + SURE_DK * 60 ))
 
 git clone -q --depth 1 --branch gh-pages "https://github.com/${GITHUB_REPOSITORY}" out || mkdir -p out
 
+# Bir sonraki işi kendimiz başlat: GitHub'ın zamanlanmış tetiklemesi saatlerce gecikebiliyor.
+# Yeni iş sıraya girer (aynı concurrency grubu) ve bu bitince hemen başlar; böylece veri akışında boşluk kalmaz.
+devam() {
+  curl -s -o /dev/null -w "Sonraki iş istendi: HTTP %{http_code}\n" -X POST \
+    -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${GITHUB_REPOSITORY}/dispatches" -d '{"event_type":"devam"}'
+}
+
 yayinla() {
   (
     cd out || exit 0
@@ -37,6 +45,6 @@ while :; do
   done
   echo "::endgroup::"
   simdi=$(date +%s)
-  if [ $(( simdi + BEKLE_SN + TUR_DK * 60 )) -gt "$son" ]; then break; fi
+  if [ $(( simdi + BEKLE_SN + TUR_DK * 60 )) -gt "$son" ]; then devam; break; fi
   sleep "$BEKLE_SN"
 done

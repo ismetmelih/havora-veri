@@ -1,11 +1,13 @@
 name: Model haritalari
 
-# İş bir kez başlayınca ~5,5 saat açık kalır ve 15 dakikada bir yeni veri arar (calis.sh).
-# Zamanlanmış tetikleme yalnızca işi yeniden başlatmak için; GitHub bunu geciktirse de veri akışı kesilmez.
+# İş ~5,5 saat açık kalır ve 15 dakikada bir yeni veri arar (calis.sh). Biterken bir sonrakini kendisi başlatır
+# (repository_dispatch "devam"); saatlik zamanlama yalnızca yedek.
 on:
   schedule:
-    - cron: '17 */2 * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
+  repository_dispatch:
+    types: [devam]
 
 permissions:
   contents: write
