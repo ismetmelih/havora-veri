@@ -10,6 +10,7 @@ Bu depoda yalnızca herkese açık model verileri ve onları hazırlayan program
 |---|---|---|---|
 | GFS | NOAA NOMADS | 0,25° | 384 saat |
 | ECMWF IFS | ECMWF açık veri (CC-BY-4.0) | 0,25° | 360 saat |
+| ECMWF AIFS | ECMWF açık veri, yapay zekâ modeli (CC-BY-4.0) | 0,25° | 360 saat (6 saatte bir) |
 | ICON-EU | DWD açık veri | 0,0625° → 0,25° | 120 saat |
 
 Model başına son 4 koşu saklanır (sabah 00Z, öğle 06Z, akşam 12Z, gece 18Z). ECMWF'nin 00Z ve 12Z koşuları 15 gün, 06Z ve 18Z koşuları 6 gün; GFS 16 gün.

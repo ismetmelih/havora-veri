@@ -669,8 +669,8 @@ def gfs_run(run, ready, steps_filter):
 ECMWF_BASE = 'https://data.ecmwf.int/forecasts'
 
 
-def ecmwf_stem(run, st):
-    return f'{ECMWF_BASE}/{run:%Y%m%d}/{run:%H}z/ifs/0p25/oper/{run:%Y%m%d%H}0000-{st}h-oper-fc'
+def ecmwf_stem(run, st, product='ifs'):
+    return f'{ECMWF_BASE}/{run:%Y%m%d}/{run:%H}z/{product}/0p25/oper/{run:%Y%m%d%H}0000-{st}h-oper-fc'
 
 
 def ecmwf(steps_filter=None):
@@ -681,10 +681,19 @@ def ecmwf(steps_filter=None):
         ecmwf_run(run, ready, steps_filter)
 
 
-def ecmwf_run(run, ready, steps_filter):
+def aifs(steps_filter=None):
+    """ECMWF AIFS: ECMWF'nin yapay zekâ modeli; aynı açık veri biçimi, 6 saatte bir 15 gün (rüzgar hamlesi, kar kalınlığı, yağış türü yok)"""
+    def ready(run, st):
+        return exists(f'{ecmwf_stem(run, st, "aifs-single")}.index')
+
+    for run in candidates('aifs', ready):
+        ecmwf_run(run, ready, steps_filter, model='aifs', product='aifs-single')
+
+
+def ecmwf_run(run, ready, steps_filter, model='ecmwf', product='ifs'):
     rid = f'{run:%Y%m%d%H}'
     maxh = 360 if run.hour in (0, 12) else 144  # 06/18 koşuları 6 gün
-    want = steps_filter or standard_steps(maxh)
+    want = steps_filter or (list(range(0, 361, 6)) if model == 'aifs' else standard_steps(maxh))
     params = {('t', '850'), ('t', '500'), ('gh', '850'), ('gh', '500'), ('msl', None), ('2t', None), ('10fg', None), ('tp', None), ('sf', None),
               ('t', '50'), ('gh', '50'), ('t', '10'), ('gh', '10'), ('u', '10'), ('sd', None), ('rsn', None),
               ('t', '100'), ('gh', '100'), ('v', '100'),
@@ -695,7 +704,7 @@ def ecmwf_run(run, ready, steps_filter):
     tp, sf = {}, {}
 
     def fetch(st):
-        stem = ecmwf_stem(run, st)
+        stem = ecmwf_stem(run, st, product)
 
         def dl():
             index = [json.loads(line) for line in get(f'{stem}.index').decode().splitlines() if line.strip()]
@@ -707,7 +716,7 @@ def ecmwf_run(run, ready, steps_filter):
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     chunks.append(resp.read())
             return b''.join(chunks)
-        for name, ltype, lev, vals, lats, lons, _ in messages(cached(f'ecmwf/{rid}/{st}', dl)):
+        for name, ltype, lev, vals, lats, lons, _ in messages(cached(f'{model}/{rid}/{st}', dl)):
             a = subset(vals, lats, lons)
             if name == 't' and lev in (850, 500, 100, 50, 10):
                 f[f't{lev}'][st] = a - 273.15
@@ -745,7 +754,7 @@ def ecmwf_run(run, ready, steps_filter):
                 sf[st] = a * 1000          # m su eşdeğeri → mm ≈ cm kar (10:1)
         derived(f, st)
 
-    res = progressive('ecmwf', run, want, ready, fetch, steps_filter)
+    res = progressive(model, run, want, ready, fetch, steps_filter)
     if not res:
         return
     steps, complete = res
@@ -755,7 +764,8 @@ def ecmwf_run(run, ready, steps_filter):
         if st in rho:
             f['sdep'][st] = np.where(rho[st] > 0, swe[st] * 1000 / np.maximum(rho[st], 50) * 100, 0)  # cm
     accumulations(f, steps, tp, sf)
-    write('ecmwf', run, steps, f, {'name': 'ECMWF', 'source': 'ECMWF açık veri (CC BY 4.0)', 'resolution': '0,25°',
+    write(model, run, steps, f, {'name': 'ECMWF AIFS' if model == 'aifs' else 'ECMWF',
+                                 'source': 'ECMWF açık veri, AIFS yapay zekâ modeli (CC BY 4.0)' if model == 'aifs' else 'ECMWF açık veri (CC BY 4.0)', 'resolution': '0,25°',
                                    'complete': complete, 'expected': want[-1]})
 
 
@@ -938,7 +948,7 @@ def archive():
 def write_index():
     """index.json: her model için saklanan koşular, en yeni önce"""
     models_meta = {}
-    for m in ('gfs', 'ecmwf', 'icon', 'ens'):
+    for m in ('gfs', 'ecmwf', 'icon', 'ens', 'aifs'):
         runs = []
         for r in runs_of(m):
             with open(os.path.join(OUT, m, r, 'meta.json'), encoding='utf-8') as mf:
@@ -961,7 +971,7 @@ def main():
         i = args.index('--steps')
         steps = [int(x) for x in args[i + 1].split(',')]
         args = args[:i] + args[i + 2:]
-    models = args or ['gfs', 'ecmwf', 'icon', 'ens']
+    models = args or ['gfs', 'ecmwf', 'icon', 'ens', 'aifs']
     if not steps:
         try:
             endeksler(OUT, get, log)   # AO, NAO, PNA, AAO, MJO, QBO, ENSO
@@ -970,7 +980,7 @@ def main():
     failed = []
     for m in models:
         try:
-            {'gfs': gfs, 'ecmwf': ecmwf, 'icon': icon, 'ens': ens}[m](steps)
+            {'gfs': gfs, 'ecmwf': ecmwf, 'icon': icon, 'ens': ens, 'aifs': aifs}[m](steps)
         except Exception as e:  # noqa: BLE001 — bir model hata verirse diğerleri yine üretilsin
             log(m, 'HATA', repr(e))
             failed.append(m)
