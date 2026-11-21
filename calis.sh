@@ -41,6 +41,8 @@ while :; do
   # Her model bitince hemen yayınla: biri uzun sürse ya da hata verse de diğerlerinin verisi beklemez
   # İstasyon gözlemleri (METAR): her turda, hızlı
   python gozlem.py
+  # MGM istasyonları (SYNOP, OGIMET): saatte bir
+  python synop.py
   # İstasyon rekorları: NOAA arşivi geçmişe doğru kademeli dolar, özet saatte bir (en çok ~5 dk)
   python rekor.py
   # Dünya sıcaklık anomalisi (NASA GISTEMP): yalnız kaynak güncellenince hesaplanır
