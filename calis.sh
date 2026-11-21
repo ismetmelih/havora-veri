@@ -22,7 +22,7 @@ yayinla() {
   (
     cd out || exit 0
     # -uall: yeni klasördeki dosyalar da (ör. ilk kez yazılan endeks/meta.json) tek tek görünsün
-    if [ -d .git ] && [ -z "$(git status --porcelain -uall -- '*/meta.json' 'gozlem/*' 'rekor/*' 'iklim/*' 'analiz/*' 'strat/*')" ]; then
+    if [ -d .git ] && [ -z "$(git status --porcelain -uall -- '*/meta.json' 'gozlem/*' 'rekor/*' 'iklim/*' 'analiz/*' 'strat/*' 'deniz/*')" ]; then
       echo "Yeni veri yok"; exit 0
     fi
     rm -rf .git
@@ -51,6 +51,8 @@ while :; do
   python strat.py
   # ENSO tahmini (NOAA CPC NMME): ayda bir yeni tahmin
   python nmme.py
+  # Deniz suyu sıcaklığı (NOAA OISST): günde bir yeni gün
+  python deniz.py
   yayinla
   for m in gfs ecmwf icon ens aifs gem ukmo; do
     python uret.py "$m" || echo "uret.py $m hata verdi; sonraki turda tekrar denenecek"
