@@ -46,7 +46,7 @@ while :; do
   # Dünya sıcaklık anomalisi (NASA GISTEMP): yalnız kaynak güncellenince hesaplanır
   python iklim.py
   yayinla
-  for m in gfs ecmwf icon ens aifs; do
+  for m in gfs ecmwf icon ens aifs gem; do
     python uret.py "$m" || echo "uret.py $m hata verdi; sonraki turda tekrar denenecek"
     yayinla
   done

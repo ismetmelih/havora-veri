@@ -912,6 +912,99 @@ def icon_run(run, ready, steps_filter):
                                   'complete': complete, 'expected': want[-1]}, regions=('tr', 'eu'))  # ICON-EU dünyayı kapsamaz
 
 
+# ---------------------------------------------------------------- GEM (Kanada, ECCC GDPS 15 km)
+
+GEM_BASE = 'https://dd.weather.gc.ca/{d}/WXO-DD/model_gdps/15km/{h}/{st:03d}/{d}T{h}Z_MSC_GDPS_{var}_LatLon0.15_PT{st:03d}H.grib2'
+GEM_VARS = ['AirTemp_IsbL-0850', 'AirTemp_IsbL-0500', 'GeopotentialHeight_IsbL-0850', 'GeopotentialHeight_IsbL-0500',
+            'GeopotentialHeight_IsbL-1000', 'Pressure_MSL', 'AirTemp_AGL-2m', 'SnowDepth_Sfc', 'WindU_IsbL-0250', 'WindV_IsbL-0250',
+            'RelativeHumidity_IsbL-0700', 'WindU_AGL-10m', 'WindV_AGL-10m']
+GEM_ACC = ['WindGust-Max_AGL-10m', 'Precip-Accum_Sfc', 'Snow-Accum_Sfc']
+
+
+def gem_url(run, var, st):
+    return GEM_BASE.format(d=f'{run:%Y%m%d}', h=f'{run:%H}', st=st, var=var)
+
+
+def subset_interp(vals, lats, lons):
+    """0,15°'lik GEM ızgarası bizim ızgaralarla hizalı değil: bölge noktalarına çift doğrusal ara değer → NPTS dizi"""
+    lons = ((lons + 180) % 360) - 180
+    ox, oy = np.argsort(lons), np.argsort(lats)
+    lons, lats, vals = lons[ox], lats[oy], vals[np.ix_(oy, ox)]
+    # Boylamda sarma: son sütundan sonra ilk sütun (+360)
+    lons = np.append(lons, lons[0] + 360)
+    vals = np.concatenate([vals, vals[:, :1]], axis=1)
+    parts = []
+    for r in REGIONS.values():
+        fy = np.interp(r['lats'], lats, np.arange(len(lats)))
+        fx = np.interp(((r['lons'] + 180) % 360) - 180, lons, np.arange(len(lons)))
+        y0 = np.clip(np.floor(fy).astype(int), 0, len(lats) - 2)
+        x0 = np.clip(np.floor(fx).astype(int), 0, len(lons) - 2)
+        ty, tx = (fy - y0)[:, None], (fx - x0)[None, :]
+        a = (vals[np.ix_(y0, x0)] * (1 - tx) + vals[np.ix_(y0, x0 + 1)] * tx) * (1 - ty) \
+            + (vals[np.ix_(y0 + 1, x0)] * (1 - tx) + vals[np.ix_(y0 + 1, x0 + 1)] * tx) * ty
+        parts.append(a.ravel())
+    return np.concatenate(parts)
+
+
+def gem(steps_filter=None):
+    def ready(run, st):
+        return all(exists(gem_url(run, v, st)) for v in GEM_VARS + (GEM_ACC if st else []))
+
+    for run in candidates('gem', ready, hours=(0, 12)):
+        gem_run(run, ready, steps_filter)
+
+
+def gem_run(run, ready, steps_filter):
+    rid = f'{run:%Y%m%d%H}'
+    want = steps_filter or list(range(0, 241, 6))
+    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'z1000', 'thk', 'ptype',
+                         'u250', 'v250', 'ws250', 'rh700', 'u10m', 'v10m')}
+    prec, snow = {}, {}
+
+    def grab(var, st):
+        data = cached(f'gem/{rid}/{st}/{var}', lambda: get(gem_url(run, var, st)))
+        for _, _, _, vals, lats, lons, _ in messages(data):
+            return subset_interp(vals, lats, lons)
+        return None
+
+    def fetch(st):
+        row = {
+            't850': grab('AirTemp_IsbL-0850', st) - 273.15, 't500': grab('AirTemp_IsbL-0500', st) - 273.15,
+            'z850': grab('GeopotentialHeight_IsbL-0850', st), 'z500': grab('GeopotentialHeight_IsbL-0500', st),
+            'z1000': grab('GeopotentialHeight_IsbL-1000', st), 'mslp': grab('Pressure_MSL', st) / 100,
+            't2m': grab('AirTemp_AGL-2m', st) - 273.15, 'sdep': grab('SnowDepth_Sfc', st) * 100,
+            'u250': grab('WindU_IsbL-0250', st), 'v250': grab('WindV_IsbL-0250', st),
+            'rh700': grab('RelativeHumidity_IsbL-0700', st), 'u10m': grab('WindU_AGL-10m', st), 'v10m': grab('WindV_AGL-10m', st),
+        }
+        if st > 0:
+            row['gust'] = grab('WindGust-Max_AGL-10m', st) * 3.6
+            prec[st] = grab('Precip-Accum_Sfc', st)            # kg/m² = mm
+            snow[st] = grab('Snow-Accum_Sfc', st)              # mm su eşdeğeri ≈ cm kar (10:1)
+        for k, v in row.items():
+            f[k][st] = v
+        derived(f, st)
+
+    res = progressive('gem', run, want, ready, fetch, steps_filter)
+    if not res:
+        return
+    steps, complete = res
+    prec[0] = np.zeros(NPTS)
+    snow[0] = np.zeros(NPTS)
+    accumulations(f, steps, prec, snow)
+    # Yağış türü: son 6 saatin yağış ve kar miktarlarının oranından (ayrı tür dosyası indirmeden)
+    for s in steps:
+        p6, s6 = f['pr6'].get(s), f['sn6'].get(s)
+        if p6 is None or s6 is None:
+            continue
+        frac = np.where(p6 > 0.2, s6 / np.maximum(p6, 1e-6), 0)
+        code = np.where(p6 > 0.2, 1, 0)
+        code = np.where((p6 > 0.2) & (frac >= 0.8), 2, code)
+        code = np.where((p6 > 0.2) & (frac > 0.2) & (frac < 0.8), 5, code)
+        f['ptype'][s] = code.astype(float)
+    write('gem', run, steps, f, {'name': 'GEM', 'source': 'ECCC (Kanada) açık veri', 'resolution': '0,15° → 0,25°',
+                                 'complete': complete, 'expected': want[-1]})
+
+
 # ---------------------------------------------------------------- Geçmiş analiz arşivi
 
 def archive():
@@ -957,7 +1050,7 @@ def archive():
 def write_index():
     """index.json: her model için saklanan koşular, en yeni önce"""
     models_meta = {}
-    for m in ('gfs', 'ecmwf', 'icon', 'ens', 'aifs'):
+    for m in ('gfs', 'ecmwf', 'icon', 'ens', 'aifs', 'gem'):
         runs = []
         for r in runs_of(m):
             with open(os.path.join(OUT, m, r, 'meta.json'), encoding='utf-8') as mf:
@@ -980,7 +1073,7 @@ def main():
         i = args.index('--steps')
         steps = [int(x) for x in args[i + 1].split(',')]
         args = args[:i] + args[i + 2:]
-    models = args or ['gfs', 'ecmwf', 'icon', 'ens', 'aifs']
+    models = args or ['gfs', 'ecmwf', 'icon', 'ens', 'aifs', 'gem']
     if not steps:
         try:
             endeksler(OUT, get, log)   # AO, NAO, PNA, AAO, MJO, QBO, ENSO
@@ -989,7 +1082,7 @@ def main():
     failed = []
     for m in models:
         try:
-            {'gfs': gfs, 'ecmwf': ecmwf, 'icon': icon, 'ens': ens, 'aifs': aifs}[m](steps)
+            {'gfs': gfs, 'ecmwf': ecmwf, 'icon': icon, 'ens': ens, 'aifs': aifs, 'gem': gem}[m](steps)
         except Exception as e:  # noqa: BLE001 — bir model hata verirse diğerleri yine üretilsin
             log(m, 'HATA', repr(e))
             failed.append(m)
