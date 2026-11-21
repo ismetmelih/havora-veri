@@ -55,6 +55,8 @@ while :; do
   python nmme.py
   # Deniz suyu sıcaklığı (NOAA OISST): günde bir yeni gün
   python deniz.py
+  # İl il aylık yağış ve SPI (CHIRPS): günde bir bakılır, ayda bir yeni ay
+  python yagis.py
   yayinla
   for m in gfs ecmwf icon ens aifs gem ukmo; do
     python uret.py "$m" || echo "uret.py $m hata verdi; sonraki turda tekrar denenecek"
