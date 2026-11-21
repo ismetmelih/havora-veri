@@ -73,6 +73,15 @@ def main():
     anom = ta - norm[months]
     w = np.cos(np.radians(lat))[:, None] * np.ones((1, len(lon)))
     tr_mask = (lat[:, None] >= TR['lat'][0]) & (lat[:, None] <= TR['lat'][1]) & (lon[None, :] >= TR['lon'][0]) & (lon[None, :] <= TR['lon'][1])
+    # Türkiye aylık sıcaklık farkı serisi (benzer kışlar için kış ortalamaları buradan)
+    trm = []
+    for k in range(len(years)):
+        g = anom[k][tr_mask]
+        g = g[np.isfinite(g)]
+        if g.size:
+            trm.append([f'{int(years[k])}-{int(months[k]) + 1:02d}', round(float(g.mean()), 2)])
+    with open(os.path.join(OUT, 'tr-aylik.json'), 'w', encoding='utf-8') as f:
+        json.dump(trm, f, separators=(',', ':'))
     summary = []
     for y in range(int(years.min()), int(years.max()) + 1):
         sel = years == y
