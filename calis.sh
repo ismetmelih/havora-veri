@@ -57,6 +57,8 @@ while :; do
   python deniz.py
   # İl il aylık yağış ve SPI (CHIRPS): günde bir bakılır, ayda bir yeni ay
   python yagis.py
+  # Kış arşivi (Open-Meteo ERA5): ilk dolum saatte 12 il, sonra günde bir
+  python kis.py
   yayinla
   for m in gfs ecmwf icon ens aifs gem ukmo; do
     python uret.py "$m" || echo "uret.py $m hata verdi; sonraki turda tekrar denenecek"
