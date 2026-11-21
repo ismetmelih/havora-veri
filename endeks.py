@@ -27,7 +27,7 @@ QBO_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/qbo.{}.index'
 ONI_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt'
 NINO_URL = 'https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for'
 NAMES = ('ao', 'nao', 'pna', 'aao', 'mjo', 'qbo', 'enso', 'tele', 'snow', 'ice')
-FORMAT = 3   # çıktı biçimi değişince artır: eski dosya beklemeden yeniden üretilir
+FORMAT = 4   # çıktı biçimi değişince artır: eski dosya beklemeden yeniden üretilir
 TELE_URL = 'https://ftp.cpc.ncep.noaa.gov/wd52dg/data/indices/tele_index.nh'
 SNOW_URL = 'https://climate.rutgers.edu/snowcover/files/wkcov.{}.txt'
 ICE_URL = 'https://noaadata.apps.nsidc.org/NOAA/G02135/north/daily/data/N_seaice_extent_daily_v4.0.csv'
@@ -146,8 +146,10 @@ def enso(get):
         # Sayılar bitişik yazılabiliyor (20.6-0.1): sırayla Niño1+2, 3, 3.4, 4 için sıcaklık ve anomali
         nums = re.findall(r'-?\d+\.\d', line[10:])
         if len(nums) == 8:
-            weekly.append((d.isoformat(), float(nums[5])))
-    return {'oni': oni[-96:], 'nino34': weekly[-104:], 'source_time': last_modified(NINO_URL)}
+            weekly.append((d.isoformat(), float(nums[1]), float(nums[3]), float(nums[5]), float(nums[7])))
+    w = weekly[-104:]
+    return {'oni': oni[-96:], 'nino34': [(r[0], r[3]) for r in w], 'nino12': [(r[0], r[1]) for r in w],
+            'nino3': [(r[0], r[2]) for r in w], 'nino4': [(r[0], r[4]) for r in w], 'source_time': last_modified(NINO_URL)}
 
 
 def tele(get):
