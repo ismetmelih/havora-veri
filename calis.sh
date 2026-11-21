@@ -22,7 +22,7 @@ yayinla() {
   (
     cd out || exit 0
     # -uall: yeni klasördeki dosyalar da (ör. ilk kez yazılan endeks/meta.json) tek tek görünsün
-    if [ -d .git ] && [ -z "$(git status --porcelain -uall -- '*/meta.json' 'gozlem/*' 'rekor/*' 'iklim/*' 'analiz/*')" ]; then
+    if [ -d .git ] && [ -z "$(git status --porcelain -uall -- '*/meta.json' 'gozlem/*' 'rekor/*' 'iklim/*' 'analiz/*' 'strat/*')" ]; then
       echo "Yeni veri yok"; exit 0
     fi
     rm -rf .git
@@ -47,6 +47,8 @@ while :; do
   python iklim.py
   # Benzer kışlar (NOAA CPC + GISTEMP): günde bir
   python analog.py
+  # Kutup girdabı geçmişi (NCEP R1 arşivi + GFS analizi), benzer kışlar: günde bir
+  python strat.py
   yayinla
   for m in gfs ecmwf icon ens aifs gem; do
     python uret.py "$m" || echo "uret.py $m hata verdi; sonraki turda tekrar denenecek"

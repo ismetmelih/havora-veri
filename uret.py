@@ -917,7 +917,8 @@ def icon_run(run, ready, steps_filter):
 GEM_BASE = 'https://dd.weather.gc.ca/{d}/WXO-DD/model_gdps/15km/{h}/{st:03d}/{d}T{h}Z_MSC_GDPS_{var}_LatLon0.15_PT{st:03d}H.grib2'
 GEM_VARS = ['AirTemp_IsbL-0850', 'AirTemp_IsbL-0500', 'GeopotentialHeight_IsbL-0850', 'GeopotentialHeight_IsbL-0500',
             'GeopotentialHeight_IsbL-1000', 'Pressure_MSL', 'AirTemp_AGL-2m', 'SnowDepth_Sfc', 'WindU_IsbL-0250', 'WindV_IsbL-0250',
-            'RelativeHumidity_IsbL-0700', 'WindU_AGL-10m', 'WindV_AGL-10m']
+            'RelativeHumidity_IsbL-0700', 'WindU_AGL-10m', 'WindV_AGL-10m',
+            'WindU_IsbL-0010', 'AirTemp_IsbL-0010', 'GeopotentialHeight_IsbL-0010']   # 10 hPa: kutup girdabı
 GEM_ACC = ['WindGust-Max_AGL-10m', 'Precip-Accum_Sfc', 'Snow-Accum_Sfc']
 
 
@@ -958,7 +959,7 @@ def gem_run(run, ready, steps_filter):
     rid = f'{run:%Y%m%d%H}'
     want = steps_filter or list(range(0, 241, 6))
     f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'z1000', 'thk', 'ptype',
-                         'u250', 'v250', 'ws250', 'rh700', 'u10m', 'v10m')}
+                         'u250', 'v250', 'ws250', 'rh700', 'u10m', 'v10m', 'u10', 't10', 'z10')}
     prec, snow = {}, {}
 
     def grab(var, st):
@@ -975,6 +976,7 @@ def gem_run(run, ready, steps_filter):
             't2m': grab('AirTemp_AGL-2m', st) - 273.15, 'sdep': grab('SnowDepth_Sfc', st) * 100,
             'u250': grab('WindU_IsbL-0250', st), 'v250': grab('WindV_IsbL-0250', st),
             'rh700': grab('RelativeHumidity_IsbL-0700', st), 'u10m': grab('WindU_AGL-10m', st), 'v10m': grab('WindV_AGL-10m', st),
+            'u10': grab('WindU_IsbL-0010', st), 't10': grab('AirTemp_IsbL-0010', st) - 273.15, 'z10': grab('GeopotentialHeight_IsbL-0010', st),
         }
         if st > 0:
             row['gust'] = grab('WindGust-Max_AGL-10m', st) * 3.6
