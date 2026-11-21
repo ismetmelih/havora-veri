@@ -52,7 +52,7 @@ while :; do
   # ENSO tahmini (NOAA CPC NMME): ayda bir yeni tahmin
   python nmme.py
   yayinla
-  for m in gfs ecmwf icon ens aifs gem; do
+  for m in gfs ecmwf icon ens aifs gem ukmo; do
     python uret.py "$m" || echo "uret.py $m hata verdi; sonraki turda tekrar denenecek"
     yayinla
   done

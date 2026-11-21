@@ -18,6 +18,7 @@ Yalnızca herkese açık veriler kullanılır; hiçbir anahtar ya da gizli bilgi
 import bz2
 import datetime as dt
 import gzip
+import io
 import json
 import os
 import re
@@ -505,9 +506,11 @@ def candidates(model, ready, hours=(0, 6, 12, 18)):
     return runs
 
 
-def progressive(model, run, want, ready, fetch, steps_filter):
-    """Hazır adımları sırayla topla. Dönen: (adımlar, tamam mı) ya da yapılacak iş yoksa None"""
+def progressive(model, run, want, ready, fetch, steps_filter, budget=None):
+    """Hazır adımları sırayla topla. Dönen: (adımlar, tamam mı) ya da yapılacak iş yoksa None.
+    budget (sn): bu süre dolunca eldekiler yazılır, kalan adımlar sonraki turda eklenir (yavaş kaynaklar için)"""
     rid = f'{run:%Y%m%d%H}'
+    t0 = time.time()
     old = meta_of(model, rid)
     # Yeni hesaplar eklenince (ör. stratosfer kesitleri) eski biçimde yazılmış koşu bir kez yeniden işlenir
     stale = bool(old) and (any(k not in old.get('series', {}) for k in SERIES_NEEDED.get(model, ()))
@@ -519,6 +522,9 @@ def progressive(model, run, want, ready, fetch, steps_filter):
     had = 0 if stale else (len(old['regions']['tr']['steps']) if old else 0)
     got = []
     for st in want:
+        if budget and time.time() - t0 > budget and not is_cached(f'{model}/{rid}/{st}'):
+            log(model, run, 'süre doldu, kalan adımlar sonraki turda')
+            break
         if not is_cached(f'{model}/{rid}/{st}') and not ready(run, st):
             break   # sonraki adımlar henüz yayınlanmadı
         try:
@@ -1007,6 +1013,192 @@ def gem_run(run, ready, steps_filter):
                                  'complete': complete, 'expected': want[-1]})
 
 
+# ---------------------------------------------------------------- UKMO (Met Office küresel 10 km, AWS açık veri)
+# NetCDF4 dosyaları (adım ve değişken başına bir dosya). Basınç seviyesi dosyaları 120–220 MB ama seviye başına
+# 128×128 parçalı: yalnız gereken seviyeler HTTP aralık istekleriyle okunur (h5py + RangeFile).
+
+UKMO_BASE = 'https://met-office-atmospheric-model-data.s3.eu-west-2.amazonaws.com/global-deterministic-10km/'
+
+
+class RangeFile(io.RawIOBase):
+    """Uzak dosyayı 1 MB'lık parçalar halinde, istendikçe okuyan dosya nesnesi (h5py bunu yerel dosya gibi açar)"""
+
+    def __init__(self, url, block=1 << 20):
+        super().__init__()
+        self.url, self.pos, self.block, self.parts = url, 0, block, {}
+        with urllib.request.urlopen(urllib.request.Request(url, method='HEAD', headers=UA), timeout=60) as r:
+            self.size = int(r.headers['Content-Length'])
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self.pos
+
+    def seek(self, off, whence=0):
+        self.pos = off if whence == 0 else self.pos + off if whence == 1 else self.size + off
+        return self.pos
+
+    def _part(self, i):
+        if i not in self.parts:
+            a = i * self.block
+            b = min(self.size, a + self.block) - 1
+            for k in range(4):
+                try:
+                    req = urllib.request.Request(self.url, headers={**UA, 'Range': f'bytes={a}-{b}'})
+                    with urllib.request.urlopen(req, timeout=120) as r:
+                        self.parts[i] = r.read()
+                    break
+                except Exception:  # noqa: BLE001
+                    if k == 3:
+                        raise
+                    time.sleep(3 * (k + 1))
+        return self.parts[i]
+
+    def readinto(self, buf):
+        n = min(len(buf), self.size - self.pos)
+        if n <= 0:
+            return 0
+        out, p = bytearray(), self.pos
+        while len(out) < n:
+            i = p // self.block
+            c = self._part(i)[p - i * self.block: p - i * self.block + n - len(out)]
+            out += c
+            p += len(c)
+        buf[:n] = out
+        self.pos += n
+        return n
+
+
+def ukmo_url(run, st, var):
+    return f'{UKMO_BASE}{run:%Y%m%dT%H%MZ}/{run + dt.timedelta(hours=st):%Y%m%dT%H%MZ}-PT{st:04d}H00M-{var}.nc'
+
+
+def ukmo_read(url, levels=None):
+    """Dosyanın ana değişkeni → bölge noktaları (NPTS); levels (hPa) verilirse {seviye: dizi}"""
+    import h5py   # yalnız UKMO için gerekli
+    f = RangeFile(url)
+    h = h5py.File(f, 'r')
+    try:
+        name = [k for k in h if isinstance(h[k], h5py.Dataset) and h[k].ndim >= 2 and k != 'flag' and not k.endswith('bnds')][0]
+        d = h[name]
+        lat, lon = h['latitude'][:].astype(float), h['longitude'][:].astype(float)
+        if levels is None:
+            return subset_interp(np.array(d[...], dtype=float), lat, lon)
+        p = [int(round(x)) for x in h['pressure'][:]]
+        return {lev: subset_interp(np.array(d[p.index(lev * 100)], dtype=float), lat, lon) for lev in levels}
+    finally:
+        h.close()
+        f.close()
+
+
+def ukmo_acc(st):
+    """(st−6, st] aralığını kaplayan birikim dosyaları: 54. saate dek saatlik, 144'e dek 3 saatlik, sonra 6 saatlik"""
+    if st <= 54:
+        return [(k, 'PT01H') for k in range(st - 5, st + 1)]
+    if st <= 144:
+        return [(st - 3, 'PT03H'), (st, 'PT03H')]
+    return [(st, 'PT06H')]
+
+
+def ukmo(steps_filter=None):
+    def ready(run, st):
+        need = [ukmo_url(run, st, 'pressure_at_mean_sea_level'), ukmo_url(run, st, 'temperature_on_pressure_levels')]
+        if st:
+            k, per = ukmo_acc(st)[-1]
+            need.append(ukmo_url(run, k, f'precipitation_accumulation-{per}'))
+        return all(exists(u) for u in need)
+
+    for run in candidates('ukmo', ready):
+        ukmo_run(run, ready, steps_filter)
+
+
+def ukmo_run(run, ready, steps_filter):
+    from concurrent.futures import ThreadPoolExecutor
+    rid = f'{run:%Y%m%d%H}'
+    want = steps_filter or list(range(0, 169, 6))
+    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'z1000', 'thk', 'ptype',
+                         'u250', 'v250', 'ws250', 'rh700', 'u10m', 'v10m')}
+    pr6, rn6 = {}, {}
+
+    def grab(key, st, fetch):
+        data = cached(f'ukmo/{rid}/{st}/{key}', lambda: fetch().astype(np.float32).tobytes())
+        return np.frombuffer(data, dtype=np.float32).astype(float)
+
+    def level(var, st, lev):
+        # Bir dosyadan birden çok seviye: hepsi tek açılışta okunup ayrı ayrı önbelleğe yazılır
+        key = lambda lv: f'{var}{lv}'   # noqa: E731
+        levs = {'geopotential_height_on_pressure_levels': (500, 850, 1000), 'temperature_on_pressure_levels': (850, 500)}.get(var, (lev,))
+        if not all(is_cached(f'ukmo/{rid}/{st}/{key(lv)}') for lv in levs):
+            got = ukmo_read(ukmo_url(run, st, var), levs)
+            for lv, a in got.items():
+                cached(f'ukmo/{rid}/{st}/{key(lv)}', lambda a=a: a.astype(np.float32).tobytes())
+        return grab(key(lev), st, lambda: None)
+
+    def surf(var, st):
+        return grab(var, st, lambda: ukmo_read(ukmo_url(run, st, var)))
+
+    def fetch(st):
+        jobs = {
+            'z500': lambda: level('geopotential_height_on_pressure_levels', st, 500),
+            't850': lambda: level('temperature_on_pressure_levels', st, 850),
+            'ws250': lambda: level('wind_speed_on_pressure_levels', st, 250),
+            'wd250': lambda: level('wind_direction_on_pressure_levels', st, 250),
+            'rh700': lambda: level('relative_humidity_on_pressure_levels', st, 700),
+            'mslp': lambda: surf('pressure_at_mean_sea_level', st), 't2m': lambda: surf('temperature_at_screen_level', st),
+            'swe': lambda: surf('snow_depth_water_equivalent', st), 'ws10': lambda: surf('wind_speed_at_10m', st),
+            'wd10': lambda: surf('wind_direction_at_10m', st),
+        }
+        if st:
+            jobs['gust'] = lambda: surf('wind_gust_at_10m', st)
+            for k, per in ukmo_acc(st):
+                jobs[f'p{k}'] = lambda k=k, per=per: grab(f'pr{per}', k, lambda: ukmo_read(ukmo_url(run, k, f'precipitation_accumulation-{per}')))
+                jobs[f'r{k}'] = lambda k=k, per=per: grab(f'rn{per}', k, lambda: ukmo_read(ukmo_url(run, k, f'rainfall_accumulation-{per}')))
+        with ThreadPoolExecutor(6) as ex:
+            res = dict(zip(jobs, ex.map(lambda fn: fn(), jobs.values())))
+        z = {lv: level('geopotential_height_on_pressure_levels', st, lv) for lv in (850, 1000)}
+        t500 = level('temperature_on_pressure_levels', st, 500)
+        rad = np.radians
+        row = {
+            't850': res['t850'] - 273.15, 't500': t500 - 273.15, 'z500': res['z500'], 'z850': z[850], 'z1000': z[1000],
+            'mslp': res['mslp'] / 100, 't2m': res['t2m'] - 273.15, 'sdep': res['swe'] * 1000 / 3,   # su eşdeğeri (m) → kar (cm), yoğunluk ~0,3
+            'u250': -res['ws250'] * np.sin(rad(res['wd250'])), 'v250': -res['ws250'] * np.cos(rad(res['wd250'])),
+            'rh700': res['rh700'] * 100, 'u10m': -res['ws10'] * np.sin(rad(res['wd10'])), 'v10m': -res['ws10'] * np.cos(rad(res['wd10'])),
+        }
+        if st:
+            row['gust'] = res['gust'] * 3.6
+            pr6[st] = sum(res[f'p{k}'] for k, _ in ukmo_acc(st)) * 1000     # m → mm
+            rn6[st] = sum(res[f'r{k}'] for k, _ in ukmo_acc(st)) * 1000
+        for k, v in row.items():
+            f[k][st] = v
+        derived(f, st)
+
+    res = progressive('ukmo', run, want, ready, fetch, steps_filter, budget=15 * 60)
+    if not res:
+        return
+    steps, complete = res
+    # 6 saatlik toplamlardan koşu başından birikim; kar = yağış − yağmur (mm su ≈ cm kar, 10:1)
+    prec, snow = {0: np.zeros(NPTS)}, {0: np.zeros(NPTS)}
+    for a, b in zip(steps, steps[1:]):
+        prec[b] = prec[a] + pr6[b]
+        snow[b] = snow[a] + np.maximum(pr6[b] - rn6[b], 0)
+    accumulations(f, steps, prec, snow)
+    for s in steps:
+        p6, s6 = f['pr6'].get(s), f['sn6'].get(s)
+        if p6 is None or s6 is None:
+            continue
+        frac = np.where(p6 > 0.2, s6 / np.maximum(p6, 1e-6), 0)
+        code = np.where(p6 > 0.2, 1, 0)
+        code = np.where((p6 > 0.2) & (frac >= 0.8), 2, code)
+        code = np.where((p6 > 0.2) & (frac > 0.2) & (frac < 0.8), 5, code)
+        f['ptype'][s] = code.astype(float)
+    write('ukmo', run, steps, f, {'name': 'UKMO', 'source': 'Met Office açık veri (AWS)', 'resolution': '10 km → 0,25°',
+                                  'complete': complete, 'expected': want[-1]})
+
+
 # ---------------------------------------------------------------- Geçmiş analiz arşivi
 
 def archive():
@@ -1052,7 +1244,7 @@ def archive():
 def write_index():
     """index.json: her model için saklanan koşular, en yeni önce"""
     models_meta = {}
-    for m in ('gfs', 'ecmwf', 'icon', 'ens', 'aifs', 'gem'):
+    for m in ('gfs', 'ecmwf', 'icon', 'ens', 'aifs', 'gem', 'ukmo'):
         runs = []
         for r in runs_of(m):
             with open(os.path.join(OUT, m, r, 'meta.json'), encoding='utf-8') as mf:
@@ -1075,7 +1267,7 @@ def main():
         i = args.index('--steps')
         steps = [int(x) for x in args[i + 1].split(',')]
         args = args[:i] + args[i + 2:]
-    models = args or ['gfs', 'ecmwf', 'icon', 'ens', 'aifs', 'gem']
+    models = args or ['gfs', 'ecmwf', 'icon', 'ens', 'aifs', 'gem', 'ukmo']
     if not steps:
         try:
             endeksler(OUT, get, log)   # AO, NAO, PNA, AAO, MJO, QBO, ENSO
@@ -1084,7 +1276,7 @@ def main():
     failed = []
     for m in models:
         try:
-            {'gfs': gfs, 'ecmwf': ecmwf, 'icon': icon, 'ens': ens, 'aifs': aifs, 'gem': gem}[m](steps)
+            {'gfs': gfs, 'ecmwf': ecmwf, 'icon': icon, 'ens': ens, 'aifs': aifs, 'gem': gem, 'ukmo': ukmo}[m](steps)
         except Exception as e:  # noqa: BLE001 — bir model hata verirse diğerleri yine üretilsin
             log(m, 'HATA', repr(e))
             failed.append(m)
