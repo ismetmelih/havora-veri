@@ -141,7 +141,12 @@ def ssw_dates(days, u):
 def main():
     os.makedirs(ARS, exist_ok=True)
     target = os.path.join(OUT, 'iklim.json')
-    if os.path.exists(target) and time.time() - os.path.getmtime(target) < 20 * 3600:
+    gp = os.path.join(OUT, 'gfs-analiz.json')
+    gfs = load(gp, {})
+    # GFS analizi geçmişi eksikse (ilk günler) her turda doldurmaya devam et; tamamsa günde bir
+    yday = dt.datetime.utcnow().date() - dt.timedelta(days=1)
+    full = all(f'{R1_END + dt.timedelta(days=k):%Y-%m-%d}' in gfs for k in range(1, (yday - R1_END).days + 1))
+    if full and os.path.exists(target) and time.time() - os.path.getmtime(target) < 20 * 3600:
         print('Stratosfer geçmişi: güncel')
         return
     t0 = time.time()
@@ -163,8 +168,6 @@ def main():
         for i, v in enumerate(a['u']):
             daily[d0 + dt.timedelta(days=i)] = v
     # 2) GFS analizleri: R1'in bittiği günden bugüne (yeniden eskiye doğru, turda en çok GFS_PER_RUN gün)
-    gp = os.path.join(OUT, 'gfs-analiz.json')
-    gfs = load(gp, {})
     today = dt.datetime.utcnow().date()
     d, got = today, 0
     while d > R1_END and got < GFS_PER_RUN and time.time() - t0 < 420:
