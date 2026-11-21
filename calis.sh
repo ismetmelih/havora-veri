@@ -22,7 +22,7 @@ yayinla() {
   (
     cd out || exit 0
     # -uall: yeni klasördeki dosyalar da (ör. ilk kez yazılan endeks/meta.json) tek tek görünsün
-    if [ -d .git ] && [ -z "$(git status --porcelain -uall -- '*/meta.json')" ]; then
+    if [ -d .git ] && [ -z "$(git status --porcelain -uall -- '*/meta.json' 'gozlem/*')" ]; then
       echo "Yeni veri yok"; exit 0
     fi
     rm -rf .git
@@ -39,6 +39,9 @@ yayinla() {
 while :; do
   echo "::group::Tur $(date -u +%H:%MZ)"
   # Her model bitince hemen yayınla: biri uzun sürse ya da hata verse de diğerlerinin verisi beklemez
+  # İstasyon gözlemleri (METAR): her turda, hızlı
+  python gozlem.py
+  yayinla
   for m in gfs ecmwf icon ens aifs; do
     python uret.py "$m" || echo "uret.py $m hata verdi; sonraki turda tekrar denenecek"
     yayinla
