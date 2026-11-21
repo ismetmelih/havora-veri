@@ -89,6 +89,8 @@ FIELDS = {
     'u250': ('m/s', 0.1),
     'v250': ('m/s', 0.1),
     'rh700': ('%', 1),       # 700 hPa bağıl nem
+    'u10m': ('m/s', 0.1),    # 10 m rüzgar (doğu bileşeni): canlı haritada rüzgar akışı ve rüzgar adı
+    'v10m': ('m/s', 0.1),    # 10 m rüzgar (kuzey bileşeni)
     'pwat': ('mm', 0.1),     # yağış suyu (atmosferdeki toplam su buharı)
     # ECMWF ENS (51 üye): ortalama alanlar yukarıdaki adlarla, belirsizlik (standart sapma) ve olasılıklar
     'z500s': ('m', 1),       # 500 hPa yükseklik belirsizliği
@@ -551,7 +553,8 @@ def gfs_run(run, ready, steps_filter):
     rid = f'{run:%Y%m%d%H}'
     want = steps_filter or standard_steps(384)
     f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'frz', 'z50', 't50', 'z10', 't10', 'u10',
-                         'z30', 't30', 'z70', 't70', 'z100', 't100', 'z1000', 'thk', 'ptype', 'u250', 'v250', 'ws250', 'rh700', 'pwat')}
+                         'z30', 't30', 'z70', 't70', 'z100', 't100', 'z1000', 'thk', 'ptype', 'u250', 'v250', 'ws250', 'rh700', 'pwat',
+                         'u10m', 'v10m')}
     apcp, csnow = {}, {}
     diag = {}
 
@@ -587,7 +590,7 @@ def gfs_run(run, ready, steps_filter):
         common = ('&var_TMP=on&var_HGT=on&var_PRMSL=on&var_APCP=on&var_CSNOW=on&var_CRAIN=on&var_CFRZR=on&var_CICEP=on'
                   '&var_GUST=on&var_SNOD=on&var_UGRD=on&var_VGRD=on&var_RH=on&var_PWAT=on'
                   '&lev_1000_mb=on&lev_850_mb=on&lev_700_mb=on&lev_500_mb=on&lev_250_mb=on&lev_100_mb=on&lev_70_mb=on&lev_50_mb=on'
-                  '&lev_30_mb=on&lev_10_mb=on&lev_mean_sea_level=on&lev_surface=on&lev_2_m_above_ground=on&lev_0C_isotherm=on'
+                  '&lev_30_mb=on&lev_10_mb=on&lev_mean_sea_level=on&lev_surface=on&lev_2_m_above_ground=on&lev_10_m_above_ground=on&lev_0C_isotherm=on'
                   '&lev_entire_atmosphere_%5C%28considered_as_a_single_layer%5C%29=on')
         d = f'dir=%2Fgfs.{run:%Y%m%d}%2F{run:%H}%2Fatmos'
         q_box = f'{d}&file=gfs.t{run:%H}z.pgrb2.0p25.f{st:03d}{common}&subregion=&toplat=72&leftlon=-50&rightlon=70&bottomlat=20'
@@ -635,6 +638,8 @@ def gfs_run(run, ready, steps_filter):
                 f['t2m'][st] = a - 273.15
             elif name == 'gust':
                 f['gust'][st] = a * 3.6
+            elif name in ('10u', '10v'):
+                f[f'{name[2]}10m'][st] = a
             elif name == 'tp' and start == 0:
                 apcp[st] = a  # koşu başından beri toplam (dosyada bir de 6 saatlik kova var, o atlanır)
             elif name == 'csnow':
@@ -695,11 +700,12 @@ def ecmwf_run(run, ready, steps_filter, model='ecmwf', product='ifs'):
     maxh = 360 if run.hour in (0, 12) else 144  # 06/18 koşuları 6 gün
     want = steps_filter or (list(range(0, 361, 6)) if model == 'aifs' else standard_steps(maxh))
     params = {('t', '850'), ('t', '500'), ('gh', '850'), ('gh', '500'), ('msl', None), ('2t', None), ('10fg', None), ('tp', None), ('sf', None),
+              ('10u', None), ('10v', None),
               ('t', '50'), ('gh', '50'), ('t', '10'), ('gh', '10'), ('u', '10'), ('sd', None), ('rsn', None),
               ('t', '100'), ('gh', '100'), ('v', '100'),
               ('gh', '1000'), ('u', '250'), ('v', '250'), ('r', '700'), ('tcwv', None), ('ptype', None)}
     f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'z50', 't50', 'z10', 't10', 'u10', 'z100', 't100', 'v100',
-                         'z1000', 'thk', 'ptype', 'u250', 'v250', 'ws250', 'rh700', 'pwat')}
+                         'z1000', 'thk', 'ptype', 'u250', 'v250', 'ws250', 'rh700', 'pwat', 'u10m', 'v10m')}
     swe, rho = {}, {}
     tp, sf = {}, {}
 
@@ -748,6 +754,8 @@ def ecmwf_run(run, ready, steps_filter, model='ecmwf', product='ifs'):
                 f['t2m'][st] = a - 273.15
             elif name == '10fg':
                 f['gust'][st] = a * 3.6
+            elif name in ('10u', '10v'):
+                f[f'{name[2]}10m'][st] = a
             elif name == 'tp':
                 tp[st] = a * 1000          # m → mm
             elif name == 'sf':
@@ -840,7 +848,7 @@ def ens_run(run, ready, steps_filter):
 ICON_BASE = 'https://opendata.dwd.de/weather/nwp/icon-eu/grib'
 # Her adımda indirilen değişkenler: (değişken, seviye); 0. saatte birikimli olanlar yok
 ICON_VARS = [('t', 850), ('t', 500), ('fi', 850), ('fi', 500), ('pmsl', None), ('t_2m', None), ('h_snow', None), ('hzerocl', None),
-             ('fi', 1000), ('u', 250), ('v', 250), ('relhum', 700), ('tqv', None), ('ww', None)]
+             ('fi', 1000), ('u', 250), ('v', 250), ('relhum', 700), ('tqv', None), ('ww', None), ('u_10m', None), ('v_10m', None)]
 ICON_ACC = [('vmax_10m', None), ('tot_prec', None), ('snow_gsp', None), ('snow_con', None)]
 
 
@@ -864,7 +872,7 @@ def icon_run(run, ready, steps_filter):
     want = steps_filter or list(range(0, 121, 3))
     g = 9.80665
     f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'frz',
-                         'z1000', 'thk', 'ptype', 'u250', 'v250', 'ws250', 'rh700', 'pwat')}
+                         'z1000', 'thk', 'ptype', 'u250', 'v250', 'ws250', 'rh700', 'pwat', 'u10m', 'v10m')}
     prec, snow = {}, {}
 
     def grab(var, st, level=None):
@@ -881,6 +889,7 @@ def icon_run(run, ready, steps_filter):
             'sdep': grab('h_snow', st) * 100, 'frz': grab('hzerocl', st),
             'z1000': grab('fi', st, 1000) / g, 'u250': grab('u', st, 250), 'v250': grab('v', st, 250),
             'rh700': grab('relhum', st, 700), 'pwat': grab('tqv', st),
+            'u10m': grab('u_10m', st), 'v10m': grab('v_10m', st),
         }
         if st > 0:
             row['ptype'] = icon_ptype(grab('ww', st))
