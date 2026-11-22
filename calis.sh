@@ -57,14 +57,16 @@ dongu yan 900 25 "python gozlem.py" "python synop.py" "python rekor.py" "python 
 dongu kamera 600 5 "python kamera.py" &
 # MGM istasyonları (canlı gözlem haritası): 5 dakikada bir bakılır, ölçümler ~10 dakikada bir yazılır
 dongu gozlem 300 10 "python mgm.py" &
-# NOAA GFS ve DWD ICON: koşudan ~3,5 saat sonra saat saat gelir, 5 dakikada bir bakılır
-dongu hizli 300 25 "python uret.py gfs" "python uret.py icon" &
-# ECMWF, AIFS ve ENS
-dongu ecmwf 300 35 "python uret.py ecmwf" "python uret.py aifs" "python uret.py ens" &
+# NOAA GFS ve DWD ICON: ayrı döngüler (biri işlenirken öteki beklemesin), 2 dakikada bir bakılır
+dongu gfs 120 25 "python uret.py gfs" &
+dongu icon 120 25 "python uret.py icon" &
+# ECMWF ayrı, AIFS ve ENS birlikte: 2,5 dakikada bir
+dongu ecmwf 150 35 "python uret.py ecmwf" &
+dongu aifs 150 35 "python uret.py aifs" "python uret.py ens" &
 # GEM ve UKMO: büyük dosyalar, yavaş
-dongu yavas 600 50 "python uret.py gem" "python uret.py ukmo" &
+dongu yavas 300 50 "python uret.py gem" "python uret.py ukmo" &
 # GEFS ortalaması ve kontrol senaryosu (canlı haritada GFS senaryo seçimi); 31 senaryonun haritaları (diyagram sayfası)
-dongu gefs 600 40 "python uret.py gefs" "python uret.py gefsk" "python uyeler.py" &
+dongu gefs 300 40 "python uret.py gefs" "python uret.py gefsk" "python uyeler.py" &
 # Yayıncı
 ( while [ "$(date +%s)" -lt "$son" ]; do yayinla; sleep 120; done ) &
 
