@@ -117,6 +117,7 @@ ARCHIVE_DAYS = 60   # geçmiş analiz arşivi (ECMWF 00Z/12Z başlangıç harita
 
 KEEP = 4         # model başına saklanan koşu sayısı
 MIN_H = 12       # yeni koşu, ilk bu kadar saati hazır olunca yayınlanır (kalanı geldikçe eklenir)
+FIRST_STEPS = 24  # yeni koşunun ilk yazımında en çok bu kadar adım (kalanı sonraki turda)
 # Koşunun meta.json → series'inde olması gereken hesaplar; eksikse koşu yeniden işlenir
 SERIES_NEEDED = {'gfs': ('vt100', 'wave1_10', 'u60_prof'), 'ecmwf': ('vt100', 'wave1_10')}
 _NEW = ('thk', 'ptype', 'ws250', 'rh700', 'pwat', 'pracc')
@@ -566,6 +567,10 @@ def progressive(model, run, want, ready, fetch, steps_filter, budget=None):
             todo += chunk[:n]
             if n < len(chunk):
                 break   # sonraki adımlar henüz yayınlanmadı
+    # Yeni koşunun bütün adımları birden hazırsa (ECMWF açık verisi tek seferde gelir) önce ilk FIRST_STEPS adım
+    # yazılır, haritalar hemen görünsün; kalanı bir sonraki turda eklenir
+    if not old and not steps_filter and len(todo) > FIRST_STEPS:
+        todo = todo[:FIRST_STEPS]
     # 2) İndirme ve işleme: birkaç kanaldan, adım sırası korunur; hata ya da süre dolunca o adımda kesilir
     got = []
     with ThreadPoolExecutor(PARALLEL.get(model, 1)) as ex:
