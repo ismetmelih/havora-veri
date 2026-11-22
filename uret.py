@@ -16,6 +16,8 @@ Kullanım: python uret.py [gfs ecmwf icon] [--steps 0,3,6]  (adım verilmezse ta
 Yalnızca herkese açık veriler kullanılır; hiçbir anahtar ya da gizli bilgi gerekmez.
 """
 import bz2
+import contextlib
+import fcntl
 import datetime as dt
 import gzip
 import io
@@ -25,6 +27,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 
@@ -150,8 +153,16 @@ def exists(url):
         return False
 
 
+_GRIB = threading.Lock()   # eccodes çözümü tek iş parçacığında (indirmeler paralel, çözme sırayla)
+
+
 def messages(data):
     """GRIB2 baytlarından (kısa ad, seviye türü, seviye, 2B dizi, enlemler, boylamlar, birikim başlangıcı) üret."""
+    with _GRIB:
+        yield from _messages(data)
+
+
+def _messages(data):
     with tempfile.NamedTemporaryFile(suffix='.grb2', delete=False) as tmp:
         tmp.write(data)
         path = tmp.name
@@ -356,6 +367,11 @@ def strat_series(f, steps, diag=None):
 
 
 def write(model, run, steps, fields, extra=None, regions=tuple(REGIONS), base=None, keep=True, diag=None):
+    with yazim_kilidi():
+        _write(model, run, steps, fields, extra, regions, base, keep, diag)
+
+
+def _write(model, run, steps, fields, extra=None, regions=tuple(REGIONS), base=None, keep=True, diag=None):
     add_anomaly(fields, run)
     if fields.get('u10') and fields.get('t10'):
         extra = {**(extra or {}), 'series': {'steps': steps, **strat_series(fields, steps, diag)}}
@@ -506,6 +522,22 @@ def candidates(model, ready, hours=(0, 6, 12, 18)):
     return runs
 
 
+# Hazır adımlar bu kadar kanaldan aynı anda indirilir (GEM ve UKMO kendi içinde paralel)
+PARALLEL = {'gfs': 4, 'icon': 4, 'ecmwf': 3, 'aifs': 3, 'ens': 2, 'gem': 3}
+LOCK = os.path.join(os.path.dirname(OUT), '.yazim.lock')
+
+
+@contextlib.contextmanager
+def yazim_kilidi():
+    """out/ klasörüne yazma ile yayınlama (calis.sh, git) aynı anda olmasın; modeller paralel döngülerde çalışır"""
+    with open(LOCK, 'a') as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def progressive(model, run, want, ready, fetch, steps_filter, budget=None):
     """Hazır adımları sırayla topla. Dönen: (adımlar, tamam mı) ya da yapılacak iş yoksa None.
     budget (sn): bu süre dolunca eldekiler yazılır, kalan adımlar sonraki turda eklenir (yavaş kaynaklar için)"""
@@ -520,19 +552,37 @@ def progressive(model, run, want, ready, fetch, steps_filter, budget=None):
         log(model, 'yeni koşu yok', run)
         return None
     had = 0 if stale else (len(old['regions']['tr']['steps']) if old else 0)
+    from concurrent.futures import ThreadPoolExecutor
+    # 1) Hazır adımlar: sekizerli gruplar halinde aynı anda kontrol, ilk hazır olmayan adımda durulur
+    todo = []
+    with ThreadPoolExecutor(8) as ex:
+        for i in range(0, len(want), 8):
+            chunk = want[i:i + 8]
+            ok = list(ex.map(lambda st: is_cached(f'{model}/{rid}/{st}') or ready(run, st), chunk))
+            n = ok.index(False) if False in ok else len(ok)
+            todo += chunk[:n]
+            if n < len(chunk):
+                break   # sonraki adımlar henüz yayınlanmadı
+    # 2) İndirme ve işleme: birkaç kanaldan, adım sırası korunur; hata ya da süre dolunca o adımda kesilir
     got = []
-    for st in want:
-        if budget and time.time() - t0 > budget and not is_cached(f'{model}/{rid}/{st}'):
-            log(model, run, 'süre doldu, kalan adımlar sonraki turda')
-            break
-        if not is_cached(f'{model}/{rid}/{st}') and not ready(run, st):
-            break   # sonraki adımlar henüz yayınlanmadı
-        try:
-            fetch(st)
-        except urllib.error.HTTPError as e:
-            log(model, run, st, 'adım alınamadı', e.code)
-            break
-        got.append(st)
+    with ThreadPoolExecutor(PARALLEL.get(model, 1)) as ex:
+        for i in range(0, len(todo), 8):
+            if budget and time.time() - t0 > budget:
+                log(model, run, 'süre doldu, kalan adımlar sonraki turda')
+                break
+            chunk = todo[i:i + 8]
+            def one(st):
+                try:
+                    fetch(st)
+                    return True
+                except urllib.error.HTTPError as e:
+                    log(model, run, st, 'adım alınamadı', e.code)
+                    return False
+            res = list(ex.map(one, chunk))
+            n = res.index(False) if False in res else len(res)
+            got += chunk[:n]
+            if n < len(chunk):
+                break
     tr_got = [x for x in got if x % REGIONS['tr']['every'] == 0]
     if not got or (len(tr_got) <= had and not steps_filter):
         log(model, run, 'yeni adım yok', f'({len(got)}/{len(want)})')
@@ -1243,6 +1293,11 @@ def archive():
 
 def write_index():
     """index.json: her model için saklanan koşular, en yeni önce"""
+    with yazim_kilidi():
+        _write_index()
+
+
+def _write_index():
     models_meta = {}
     for m in ('gfs', 'ecmwf', 'icon', 'ens', 'aifs', 'gem', 'ukmo'):
         runs = []
@@ -1268,7 +1323,7 @@ def main():
         steps = [int(x) for x in args[i + 1].split(',')]
         args = args[:i] + args[i + 2:]
     models = args or ['gfs', 'ecmwf', 'icon', 'ens', 'aifs', 'gem', 'ukmo']
-    if not steps:
+    if not steps and 'gfs' in models:   # göstergeler yalnız GFS döngüsünde (paralel döngüler aynı dosyaya yazmasın)
         try:
             endeksler(OUT, get, log)   # AO, NAO, PNA, AAO, MJO, QBO, ENSO
         except Exception as e:  # noqa: BLE001
@@ -1281,7 +1336,7 @@ def main():
             log(m, 'HATA', repr(e))
             failed.append(m)
         write_index()  # her modelden sonra: biten modeller hemen görünsün
-    if not steps:
+    if not steps and 'ecmwf' in models:   # geçmiş analiz arşivi ECMWF verisinden: yalnız ECMWF'den sonra
         try:
             archive()
         except Exception as e:  # noqa: BLE001

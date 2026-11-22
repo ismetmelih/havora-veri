@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # GitHub'ın zamanlanmış işleri saatlik değil 4–8 saatte bir çalışabiliyor. Bu yüzden iş bir kez başlayınca
-# yaklaşık 5,5 saat açık kalır: 15 dakikada bir yeni model koşusu ve gösterge var mı bakar, varsa hemen yayınlar.
-# Bir sonraki zamanlanmış iş sıraya girer ve bu bitince devralır.
+# yaklaşık 5,5 saat açık kalır. Modeller paralel döngülerde çalışır: hızlı yayınlananlar (GFS, ICON) yavaşları
+# (GEM, UKMO) beklemez. Yayıncı 2 dakikada bir değişiklik varsa yayınlar. Bir sonraki iş sıraya girer ve bu bitince devralır.
 set -u
 SURE_DK=${SURE_DK:-330}      # iş en çok bu kadar dakika sürer (GitHub sınırı 360)
-BEKLE_SN=${BEKLE_SN:-900}    # turlar arası bekleme
-TUR_DK=50                    # bir tur (bütün modeller yeni olursa) en çok bu kadar sürebilir
+LOCK=.yazim.lock             # out/ klasörüne yazma (uret.py) ve yayınlama aynı anda olmasın
 son=$(( $(date +%s) + SURE_DK * 60 ))
 
 git clone -q --depth 1 --branch gh-pages "https://github.com/${GITHUB_REPOSITORY}" out || mkdir -p out
@@ -20,10 +19,11 @@ devam() {
 
 yayinla() {
   (
+    flock 9
     cd out || exit 0
     # -uall: yeni klasördeki dosyalar da (ör. ilk kez yazılan endeks/meta.json) tek tek görünsün
     if [ -d .git ] && [ -z "$(git status --porcelain -uall -- '*/meta.json' 'gozlem/*' 'rekor/*' 'iklim/*' 'analiz/*' 'strat/*' 'deniz/*')" ]; then
-      echo "Yeni veri yok"; exit 0
+      exit 0
     fi
     rm -rf .git
     touch .nojekyll
@@ -32,40 +32,36 @@ yayinla() {
     git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
     git add -A
     git commit -qm "Model verileri $(date -u +%Y-%m-%dT%H:%MZ)"
-    git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" gh-pages && echo "Yayınlandı"
-  )
+    git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}" gh-pages && echo "[yayın] Yayınlandı $(date -u +%H:%MZ)"
+  ) 9>"$LOCK"
 }
 
-while :; do
-  echo "::group::Tur $(date -u +%H:%MZ)"
-  # Her model bitince hemen yayınla: biri uzun sürse ya da hata verse de diğerlerinin verisi beklemez
-  # İstasyon gözlemleri (METAR): her turda, hızlı
-  python gozlem.py
-  # MGM istasyonları (SYNOP, OGIMET): saatte bir
-  python synop.py
-  # İstasyon rekorları: NOAA arşivi geçmişe doğru kademeli dolar, özet saatte bir (en çok ~5 dk)
-  python rekor.py
-  # Dünya sıcaklık anomalisi (NASA GISTEMP): yalnız kaynak güncellenince hesaplanır
-  python iklim.py
-  # Benzer kışlar (NOAA CPC + GISTEMP): günde bir
-  python analog.py
-  # Kutup girdabı geçmişi (NCEP R1 arşivi + GFS analizi), benzer kışlar: günde bir
-  python strat.py
-  # ENSO tahmini (NOAA CPC NMME): ayda bir yeni tahmin
-  python nmme.py
-  # Deniz suyu sıcaklığı (NOAA OISST): günde bir yeni gün
-  python deniz.py
-  # İl il aylık yağış ve SPI (CHIRPS): günde bir bakılır, ayda bir yeni ay
-  python yagis.py
-  # Kış arşivi (Open-Meteo ERA5): ilk dolum saatte 12 il, sonra günde bir
-  python kis.py
-  yayinla
-  for m in gfs ecmwf icon ens aifs gem ukmo; do
-    python uret.py "$m" || echo "uret.py $m hata verdi; sonraki turda tekrar denenecek"
-    yayinla
+# Döngü: komutları sırayla çalıştırır, bekler; kalan süre bir turdan azsa yeni tur başlatmaz.
+# dongu <ad> <bekleme sn> <bir turun en uzun süresi dk> <komut>...
+dongu() {
+  local ad=$1 bekle=$2 tur=$3
+  shift 3
+  while [ $(( $(date +%s) + tur * 60 )) -lt "$son" ]; do
+    for k in "$@"; do
+      eval "$k" 2>&1 | sed -u "s/^/[$ad] /"
+    done
+    sleep "$bekle"
   done
-  echo "::endgroup::"
-  simdi=$(date +%s)
-  if [ $(( simdi + BEKLE_SN + TUR_DK * 60 )) -gt "$son" ]; then devam; break; fi
-  sleep "$BEKLE_SN"
-done
+  echo "[$ad] süre doldu"
+}
+
+# Yan işler (gözlemler, arşivler): her biri kendi sıklığını dosya yaşına göre denetler
+dongu yan 900 25 "python gozlem.py" "python synop.py" "python rekor.py" "python iklim.py" "python analog.py" \
+  "python strat.py" "python nmme.py" "python deniz.py" "python yagis.py" "python kis.py" &
+# NOAA GFS ve DWD ICON: koşudan ~3,5 saat sonra saat saat gelir, 5 dakikada bir bakılır
+dongu hizli 300 25 "python uret.py gfs" "python uret.py icon" &
+# ECMWF, AIFS ve ENS
+dongu ecmwf 300 35 "python uret.py ecmwf" "python uret.py aifs" "python uret.py ens" &
+# GEM ve UKMO: büyük dosyalar, yavaş
+dongu yavas 600 50 "python uret.py gem" "python uret.py ukmo" &
+# Yayıncı
+( while [ "$(date +%s)" -lt "$son" ]; do yayinla; sleep 120; done ) &
+
+wait
+yayinla
+devam
