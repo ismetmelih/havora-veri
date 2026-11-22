@@ -96,7 +96,7 @@ FIELDS = {
     'u10m': ('m/s', 0.1),    # 10 m rüzgar (doğu bileşeni): canlı haritada rüzgar akışı ve rüzgar adı
     'v10m': ('m/s', 0.1),    # 10 m rüzgar (kuzey bileşeni)
     'pwat': ('mm', 0.1),     # yağış suyu (atmosferdeki toplam su buharı)
-    'tcc': ('%', 1),         # toplam bulut örtüsü (GFS, ECMWF, AIFS, ICON)
+    'tcc': ('%', 1),         # toplam bulut örtüsü (GFS, ECMWF, AIFS, ICON, GEM, UKMO, GEFS)
     # ECMWF ENS (51 üye): ortalama alanlar yukarıdaki adlarla, belirsizlik (standart sapma) ve olasılıklar
     'z500s': ('m', 1),       # 500 hPa yükseklik belirsizliği
     't850s': ('°C', 0.1),    # 850 hPa sıcaklık belirsizliği
@@ -1071,7 +1071,8 @@ GEM_BASE = 'https://dd.weather.gc.ca/{d}/WXO-DD/model_gdps/15km/{h}/{st:03d}/{d}
 GEM_VARS = ['AirTemp_IsbL-0850', 'AirTemp_IsbL-0500', 'GeopotentialHeight_IsbL-0850', 'GeopotentialHeight_IsbL-0500',
             'GeopotentialHeight_IsbL-1000', 'Pressure_MSL', 'AirTemp_AGL-2m', 'SnowDepth_Sfc', 'WindU_IsbL-0250', 'WindV_IsbL-0250',
             'RelativeHumidity_IsbL-0700', 'WindU_AGL-10m', 'WindV_AGL-10m',
-            'WindU_IsbL-0010', 'AirTemp_IsbL-0010', 'GeopotentialHeight_IsbL-0010']   # 10 hPa: kutup girdabı
+            'WindU_IsbL-0010', 'AirTemp_IsbL-0010', 'GeopotentialHeight_IsbL-0010',   # 10 hPa: kutup girdabı
+            'TotalCloudCover_Sfc']   # toplam bulut (%)
 GEM_ACC = ['WindGust-Max_AGL-10m', 'Precip-Accum_Sfc', 'Snow-Accum_Sfc']
 
 
@@ -1112,7 +1113,7 @@ def gem_run(run, ready, steps_filter):
     rid = f'{run:%Y%m%d%H}'
     want = steps_filter or list(range(0, 241, 6))
     f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'z1000', 'thk', 'ptype',
-                         'u250', 'v250', 'ws250', 'rh700', 'u10m', 'v10m', 'u10', 't10', 'z10')}
+                         'u250', 'v250', 'ws250', 'rh700', 'u10m', 'v10m', 'u10', 't10', 'z10', 'tcc')}
     prec, snow = {}, {}
 
     def grab(var, st):
@@ -1130,6 +1131,7 @@ def gem_run(run, ready, steps_filter):
             'u250': grab('WindU_IsbL-0250', st), 'v250': grab('WindV_IsbL-0250', st),
             'rh700': grab('RelativeHumidity_IsbL-0700', st), 'u10m': grab('WindU_AGL-10m', st), 'v10m': grab('WindV_AGL-10m', st),
             'u10': grab('WindU_IsbL-0010', st), 't10': grab('AirTemp_IsbL-0010', st) - 273.15, 'z10': grab('GeopotentialHeight_IsbL-0010', st),
+            'tcc': grab('TotalCloudCover_Sfc', st),
         }
         if st > 0:
             row['gust'] = grab('WindGust-Max_AGL-10m', st) * 3.6
@@ -1268,7 +1270,7 @@ def ukmo_run(run, ready, steps_filter):
     rid = f'{run:%Y%m%d%H}'
     want = steps_filter or list(range(0, 169, 6))
     f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'z1000', 'thk', 'ptype',
-                         'u250', 'v250', 'ws250', 'rh700', 'u10m', 'v10m')}
+                         'u250', 'v250', 'ws250', 'rh700', 'u10m', 'v10m', 'tcc')}
     pr6, rn6 = {}, {}
 
     def grab(key, st, fetch):
@@ -1297,7 +1299,7 @@ def ukmo_run(run, ready, steps_filter):
             'rh700': lambda: level('relative_humidity_on_pressure_levels', st, 700),
             'mslp': lambda: surf('pressure_at_mean_sea_level', st), 't2m': lambda: surf('temperature_at_screen_level', st),
             'swe': lambda: surf('snow_depth_water_equivalent', st), 'ws10': lambda: surf('wind_speed_at_10m', st),
-            'wd10': lambda: surf('wind_direction_at_10m', st),
+            'wd10': lambda: surf('wind_direction_at_10m', st), 'tcc': lambda: surf('cloud_amount_of_total_cloud', st),
         }
         if st:
             jobs['gust'] = lambda: surf('wind_gust_at_10m', st)
@@ -1314,6 +1316,7 @@ def ukmo_run(run, ready, steps_filter):
             'mslp': res['mslp'] / 100, 't2m': res['t2m'] - 273.15, 'sdep': res['swe'] * 1000 / 3,   # su eşdeğeri (m) → kar (cm), yoğunluk ~0,3
             'u250': -res['ws250'] * np.sin(rad(res['wd250'])), 'v250': -res['ws250'] * np.cos(rad(res['wd250'])),
             'rh700': res['rh700'] * 100, 'u10m': -res['ws10'] * np.sin(rad(res['wd10'])), 'v10m': -res['ws10'] * np.cos(rad(res['wd10'])),
+            'tcc': res['tcc'] * (100 if np.nanmax(res['tcc']) <= 1.5 else 1),   # oran (0–1) → %
         }
         if st:
             row['gust'] = res['gust'] * 3.6
