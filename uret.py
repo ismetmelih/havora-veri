@@ -527,7 +527,7 @@ def candidates(model, ready, hours=(0, 6, 12, 18)):
 
 
 # Hazır adımlar bu kadar kanaldan aynı anda indirilir (GEM ve UKMO kendi içinde paralel)
-PARALLEL = {'gfs': 4, 'icon': 4, 'ecmwf': 3, 'aifs': 3, 'ens': 2, 'gem': 3, 'gefs': 3, 'gefsk': 3}
+PARALLEL = {'gfs': 4, 'icon': 4, 'ecmwf': 3, 'ecmwf9': 4, 'aifs': 3, 'ens': 2, 'gem': 3, 'gefs': 3, 'gefsk': 3}
 LOCK = os.path.join(os.path.dirname(OUT), '.yazim.lock')
 
 
@@ -937,6 +937,187 @@ def ecmwf_run(run, ready, steps_filter, model='ecmwf', product='ifs'):
     write(model, run, steps, f, {'name': 'ECMWF AIFS' if model == 'aifs' else 'ECMWF',
                                  'source': 'ECMWF açık veri, AIFS yapay zekâ modeli (CC BY 4.0)' if model == 'aifs' else 'ECMWF açık veri (CC BY 4.0)', 'resolution': '0,25°',
                                    'complete': complete, 'expected': want[-1]})
+
+
+# ---------------------------------------------------------------- ECMWF IFS 9 km (Open-Meteo açık veri, erken)
+# ECMWF'nin gerçek zamanlı 9 km IFS çıktısı (CC BY 4.0), Open-Meteo'nun AWS açık veri deposunda adım adım yayınlanır:
+# 0,25° açık veriden ~2 saat önce. Yalnız yer seviyesi alanları var (850/500 hPa yok). Dosyalar ECMWF'nin O1280
+# indirgenmiş Gauss ızgarasında; her adımda bölgemizin enlem bandı HTTP Range ile okunur, bizim ızgaraya
+# çift doğrusal ara değerle aktarılır.
+
+OM_BASE = 'https://openmeteo.s3.amazonaws.com/data_spatial/ecmwf_ifs'
+EC9_REGIONS = ('tr', 'eu')
+_O1280 = {}
+_O1280_LOCK = threading.Lock()
+
+
+def om_url(run, h):
+    vt = run + dt.timedelta(hours=h)
+    return f'{OM_BASE}/{run:%Y/%m/%d}/{run:%H%M}Z/{vt:%Y-%m-%dT%H%M}.om'
+
+
+def om_hours(run):
+    """Kaynaktaki dosyalar: 90 saate dek saatlik, 144'e dek 3 saatlik, sonra 6 saatlik (06/18 koşuları 144 saat)"""
+    maxh = 360 if run.hour in (0, 12) else 144
+    return list(range(0, 91)) + list(range(93, 145, 3)) + list(range(150, maxh + 1, 6))
+
+
+def o1280():
+    """O1280 ızgarası ve bölge noktaları için çift doğrusal ağırlıklar (bir kez hesaplanır)"""
+    with _O1280_LOCK:
+        if not _O1280:
+            _o1280_build()
+    return _O1280
+
+
+def _o1280_build():
+    n = 1280
+    x, _ = np.polynomial.legendre.leggauss(2 * n)
+    lat = np.degrees(np.arcsin(x))[::-1]                       # kuzeyden güneye
+    npr = np.array([4 * i + 16 for i in range(1, n + 1)])
+    npr = np.concatenate([npr, npr[::-1]])                     # her enlemde nokta sayısı
+    start = np.concatenate([[0], np.cumsum(npr)[:-1]])
+    plat = np.concatenate([np.repeat(REGIONS[k]['lats'], REGIONS[k]['nx']) for k in EC9_REGIONS])
+    plon = np.concatenate([np.tile(REGIONS[k]['lons'], REGIONS[k]['ny']) for k in EC9_REGIONS]) % 360
+    # Kaynak enlem bandı (bir satır pay)
+    r0 = max(int(np.searchsorted(-lat, -plat.max())) - 2, 0)
+    r1 = min(int(np.searchsorted(-lat, -plat.min())) + 2, 2 * n - 1)
+    a, b = int(start[r0]), int(start[r1] + npr[r1])
+    i0 = np.clip(np.searchsorted(-lat, -plat, side='right') - 1, r0, r1 - 1)   # hedefin kuzeyindeki satır
+    i1 = i0 + 1
+    wy = (lat[i0] - plat) / (lat[i0] - lat[i1])
+    idx, w = [], []
+    for row, wr in ((i0, 1 - wy), (i1, wy)):
+        m = npr[row]
+        fx = plon / 360 * m
+        j0 = np.floor(fx).astype(int) % m
+        j1 = (j0 + 1) % m
+        wx = fx - np.floor(fx)
+        idx += [start[row] + j0 - a, start[row] + j1 - a]
+        w += [wr * (1 - wx), wr * wx]
+    # Bölge noktaları NPTS düzeninde: EC9_REGIONS dışındakiler NaN
+    sel = np.concatenate([np.arange(REGIONS[k]['off'], REGIONS[k]['off'] + REGIONS[k]['ny'] * REGIONS[k]['nx']) for k in EC9_REGIONS])
+    _O1280.update(a=a, b=b, idx=np.array(idx), w=np.array(w), sel=sel)
+
+
+class RangeFS:
+    """omfiles için uzak dosya: HTTP Range ile 1 MB'lık bloklar (bir değişkenin bandı dosyada art arda durur)"""
+    BLOCK = 1 << 20
+
+    def __init__(self):
+        self.blocks, self.sizes = {}, {}
+
+    def size(self, path, **_):
+        if path not in self.sizes:
+            req = urllib.request.Request(path, headers=UA, method='HEAD')
+            with urllib.request.urlopen(req, timeout=60) as r:
+                self.sizes[path] = int(r.headers['Content-Length'])
+        return self.sizes[path]
+
+    def _block(self, path, i):
+        if (path, i) not in self.blocks:
+            a = i * self.BLOCK
+            b = min(a + self.BLOCK, self.size(path)) - 1
+            for k in range(4):
+                try:
+                    req = urllib.request.Request(path, headers={**UA, 'Range': f'bytes={a}-{b}'})
+                    with urllib.request.urlopen(req, timeout=120) as r:
+                        self.blocks[(path, i)] = r.read()
+                    break
+                except Exception:  # noqa: BLE001
+                    if k == 3:
+                        raise
+                    time.sleep(3 * (k + 1))
+        return self.blocks[(path, i)]
+
+    def cat_file(self, path, start=None, end=None, **_):
+        start = start or 0
+        end = self.size(path) if end is None else end
+        first, last = start // self.BLOCK, (end - 1) // self.BLOCK
+        data = b''.join(self._block(path, i) for i in range(first, last + 1))
+        return data[start - first * self.BLOCK:end - first * self.BLOCK]
+
+
+def om_read(url, names):
+    """Bir .om dosyasından istenen değişkenler → bölge noktaları (NPTS uzunlukta, EC9 dışı NaN)"""
+    import omfiles   # yalnız bu model için gerekli
+    g = o1280()
+    rd = omfiles.OmFileReader.from_fsspec(RangeFS(), url)
+    out = {}
+    for name in names:
+        band = np.asarray(rd.get_child_by_name(name)[0:1, g['a']:g['b']], dtype=float).ravel()
+        a = np.full(NPTS, np.nan)
+        a[g['sel']] = (band[g['idx']] * g['w']).sum(axis=0)
+        out[name] = a
+    return out
+
+
+def ecmwf9(steps_filter=None):
+    def ready(run, st):
+        return exists(om_url(run, st))
+
+    for run in candidates('ecmwf9', ready):
+        ecmwf9_run(run, ready, steps_filter)
+
+
+def ecmwf9_run(run, ready, steps_filter):
+    rid = f'{run:%Y%m%d%H}'
+    hours = om_hours(run)
+    want = steps_filter or standard_steps(hours[-1])
+    f = {k: {} for k in ('mslp', 't2m', 'gust', 'sdep', 'ptype', 'pwat', 'u10m', 'v10m', 'tcc')}
+    ip, isn = {}, {}   # adımın aralığındaki (önceki adımdan bu yana) yağış ve kar
+
+    def fetch(st):
+        prev = max([x for x in want if x < st], default=-1)
+        between = [h for h in hours if prev < h <= st]
+
+        def dl():
+            snap = om_read(om_url(run, st), ['temperature_2m', 'pressure_msl', 'wind_u_component_10m', 'wind_v_component_10m',
+                                             'cloud_cover', 'total_column_integrated_water_vapour', 'snow_depth'])
+            pr, sn, gu = np.zeros(NPTS), np.zeros(NPTS), np.full(NPTS, np.nan)
+            for h in between:
+                if h == 0:
+                    continue
+                x = om_read(om_url(run, h), ['precipitation', 'snowfall_water_equivalent', 'wind_gusts_10m'])
+                pr += np.nan_to_num(x['precipitation'])
+                sn += np.nan_to_num(x['snowfall_water_equivalent'])
+                gu = np.fmax(gu, x['wind_gusts_10m'])
+            buf = io.BytesIO()
+            np.savez_compressed(buf, pr=pr.astype(np.float32), sn=sn.astype(np.float32), gu=gu.astype(np.float32),
+                                **{k: v.astype(np.float32) for k, v in snap.items()})
+            return buf.getvalue()
+        z = np.load(io.BytesIO(cached(f'ecmwf9/{rid}/{st}', dl)))
+        mask = np.isnan(z['temperature_2m'])
+        f['t2m'][st] = z['temperature_2m'].astype(float)
+        f['mslp'][st] = z['pressure_msl'] / 100
+        f['u10m'][st], f['v10m'][st] = z['wind_u_component_10m'].astype(float), z['wind_v_component_10m'].astype(float)
+        f['tcc'][st] = z['cloud_cover'].astype(float)
+        f['pwat'][st] = z['total_column_integrated_water_vapour'].astype(float)
+        f['sdep'][st] = z['snow_depth'] * 100                      # m → cm
+        if st:
+            f['gust'][st] = z['gu'] * 3.6                          # aralıktaki en güçlü hamle, m/s → km/sa
+            pr, sn = z['pr'].astype(float), z['sn'].astype(float)
+            ip[st], isn[st] = np.where(mask, np.nan, pr), np.where(mask, np.nan, sn)
+            # Yağış türü: aralıktaki kar payından (su eşdeğeri; 0,1 mm/sa altı yağış yok sayılır)
+            frac = np.where(pr > 0, sn / np.maximum(pr, 1e-6), 0)
+            code = np.where(frac >= 0.8, 2, np.where(frac >= 0.2, 5, 1)).astype(float)
+            code[pr < 0.1 * (st - prev)] = 0
+            code[mask] = np.nan
+            f['ptype'][st] = code
+
+    res = progressive('ecmwf9', run, want, ready, fetch, steps_filter)
+    if not res:
+        return
+    steps, complete = res
+    tp, sf = {0: np.zeros(NPTS)}, {0: np.zeros(NPTS)}
+    acc_p, acc_s = np.zeros(NPTS), np.zeros(NPTS)
+    for st in steps:
+        if st:
+            acc_p, acc_s = acc_p + np.nan_to_num(ip[st]), acc_s + np.nan_to_num(isn[st])   # sn: mm su ≈ cm kar (10:1)
+            tp[st], sf[st] = acc_p.copy(), acc_s.copy()
+    accumulations(f, steps, tp, sf)
+    write('ecmwf9', run, steps, f, {'name': 'ECMWF 9 km', 'source': 'ECMWF IFS gerçek zamanlı 9 km, Open-Meteo açık verisi (CC BY 4.0)',
+                                    'resolution': '9 km', 'complete': complete, 'expected': want[-1]}, regions=EC9_REGIONS)
 
 
 # ---------------------------------------------------------------- ECMWF ENS (açık veri, hazır ürünler)
@@ -1409,7 +1590,7 @@ def write_index():
 
 def _write_index():
     models_meta = {}
-    for m in ('gfs', 'ecmwf', 'icon', 'ens', 'aifs', 'gem', 'ukmo', 'gefs', 'gefsk'):
+    for m in ('gfs', 'ecmwf', 'ecmwf9', 'icon', 'ens', 'aifs', 'gem', 'ukmo', 'gefs', 'gefsk'):
         runs = []
         for r in runs_of(m):
             with open(os.path.join(OUT, m, r, 'meta.json'), encoding='utf-8') as mf:
@@ -1441,7 +1622,7 @@ def main():
     failed = []
     for m in models:
         try:
-            {'gfs': gfs, 'ecmwf': ecmwf, 'icon': icon, 'ens': ens, 'aifs': aifs, 'gem': gem, 'ukmo': ukmo,
+            {'gfs': gfs, 'ecmwf': ecmwf, 'ecmwf9': ecmwf9, 'icon': icon, 'ens': ens, 'aifs': aifs, 'gem': gem, 'ukmo': ukmo,
              'gefs': gefs_model('gefs'), 'gefsk': gefs_model('gefsk')}[m](steps)
         except Exception as e:  # noqa: BLE001 — bir model hata verirse diğerleri yine üretilsin
             log(m, 'HATA', repr(e))

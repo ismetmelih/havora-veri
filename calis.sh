@@ -62,6 +62,8 @@ dongu gfs 120 25 "python uret.py gfs" &
 dongu icon 120 25 "python uret.py icon" &
 # ECMWF ayrı, AIFS ve ENS birlikte: 2,5 dakikada bir
 dongu ecmwf 150 35 "python uret.py ecmwf" &
+# ECMWF 9 km (Open-Meteo açık verisi): 0,25° açık veriden ~2 saat önce, adım adım; yalnız yer alanları
+dongu ecmwf9 120 35 "python uret.py ecmwf9" &
 dongu aifs 150 35 "python uret.py aifs" "python uret.py ens" &
 # GEM ve UKMO: ayrı döngüler; UKMO yavaş okunur, 8 dakikada bir eldekiler yazılır
 dongu gem 150 40 "python uret.py gem" &

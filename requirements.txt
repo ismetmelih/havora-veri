@@ -3,3 +3,4 @@ eccodeslib==2.43.0
 numpy==2.0.2
 scipy==1.13.1
 h5py==3.12.1
+omfiles==1.1.0
