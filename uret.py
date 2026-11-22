@@ -75,6 +75,7 @@ FIELDS = {
     'z500a': ('m', 1),       # 500 hPa yüksekliğin 1990–2019 ortalamasından farkı
     't850a': ('°C', 0.1),    # 850 hPa sıcaklığın 1990–2019 ortalamasından farkı
     'snacc': ('cm', 0.1),    # koşu başından beri toplam kar
+    'pracc': ('mm', 0.1),    # koşu başından beri toplam yağış
     'sdep': ('cm', 1),       # yerdeki kar kalınlığı
     'frz': ('m', 10),        # donma seviyesi (0 °C yüksekliği)
     'z50': ('m', 1),         # 50 hPa yükseklik (stratosfer)
@@ -118,7 +119,7 @@ KEEP = 4         # model başına saklanan koşu sayısı
 MIN_H = 12       # yeni koşu, ilk bu kadar saati hazır olunca yayınlanır (kalanı geldikçe eklenir)
 # Koşunun meta.json → series'inde olması gereken hesaplar; eksikse koşu yeniden işlenir
 SERIES_NEEDED = {'gfs': ('vt100', 'wave1_10', 'u60_prof'), 'ecmwf': ('vt100', 'wave1_10')}
-_NEW = ('thk', 'ptype', 'ws250', 'rh700', 'pwat')
+_NEW = ('thk', 'ptype', 'ws250', 'rh700', 'pwat', 'pracc')
 FIELDS_NEEDED = {'gfs': _NEW, 'ecmwf': _NEW, 'icon': _NEW}   # eksikse koşu bir kez yeniden işlenir
 # Üretim sürümü: bir modelin hesabı düzeltilince artır, o sürümden eski koşular bir kez yeniden üretilir
 GEN = {'gfs': 2}   # 2: dünya ızgarasında −180° sütunu boştu (dalga-1/2 NaN)
@@ -222,10 +223,11 @@ def cumulative_to(steps, cum, hours=6):
 
 
 def accumulations(f, steps, rain, snow):
-    """Birikmiş yağış ve kardan 6 ve 24 saatlik toplamlar, koşu başından beri toplam kar"""
+    """Birikmiş yağış ve kardan 6 ve 24 saatlik toplamlar, koşu başından beri toplam kar ve toplam yağış"""
     f['pr6'], f['sn6'] = cumulative_to(steps, rain, 6), cumulative_to(steps, snow, 6)
     f['pr24'], f['sn24'] = cumulative_to(steps, rain, 24), cumulative_to(steps, snow, 24)
     f['snacc'] = {s: np.maximum(snow[s], 0) for s in steps if s in snow}
+    f['pracc'] = {s: np.maximum(rain[s], 0) for s in steps if s in rain}
 
 
 class Climate:
