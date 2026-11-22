@@ -63,10 +63,12 @@ dongu icon 120 25 "python uret.py icon" &
 # ECMWF ayrı, AIFS ve ENS birlikte: 2,5 dakikada bir
 dongu ecmwf 150 35 "python uret.py ecmwf" &
 dongu aifs 150 35 "python uret.py aifs" "python uret.py ens" &
-# GEM ve UKMO: büyük dosyalar, yavaş
-dongu yavas 300 50 "python uret.py gem" "python uret.py ukmo" &
+# GEM ve UKMO: ayrı döngüler; UKMO yavaş okunur, 8 dakikada bir eldekiler yazılır
+dongu gem 150 40 "python uret.py gem" &
+dongu ukmo 120 50 "python uret.py ukmo" &
 # GEFS ortalaması ve kontrol senaryosu (canlı haritada GFS senaryo seçimi); 31 senaryonun haritaları (diyagram sayfası)
-dongu gefs 300 40 "python uret.py gefs" "python uret.py gefsk" "python uyeler.py" &
+dongu gefs 150 40 "python uret.py gefs" &
+dongu gefsk 150 40 "python uret.py gefsk" "python uyeler.py" &
 # Yayıncı
 ( while [ "$(date +%s)" -lt "$son" ]; do yayinla; sleep 120; done ) &
 

@@ -592,7 +592,9 @@ def progressive(model, run, want, ready, fetch, steps_filter, budget=None):
             if n < len(chunk):
                 break
     tr_got = [x for x in got if x % REGIONS['tr']['every'] == 0]
-    if not got or (len(tr_got) <= had and not steps_filter):
+    # Beklenen adım sayısı değişip koşu zaten tamamlanmışsa (ör. UKMO kısa koşuları) bir kez 'tamam' diye yazılır
+    finished = bool(old) and old.get('complete') is False and len(got) == len(want)
+    if not got or (len(tr_got) <= had and not steps_filter and not finished):
         log(model, run, 'yeni adım yok', f'({len(got)}/{len(want)})')
         return None
     log(model, run, f'{len(got)}/{len(want)} adım hazır')
@@ -1275,7 +1277,8 @@ def ukmo(steps_filter=None):
 def ukmo_run(run, ready, steps_filter):
     from concurrent.futures import ThreadPoolExecutor
     rid = f'{run:%Y%m%d%H}'
-    want = steps_filter or list(range(0, 169, 6))
+    # 00Z/12Z 7 gün, 06Z/18Z kısa koşu (69 saate dek)
+    want = steps_filter or list(range(0, 169 if run.hour in (0, 12) else 67, 6))
     f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'gust', 'sdep', 'z1000', 'thk', 'ptype',
                          'u250', 'v250', 'ws250', 'rh700', 'u10m', 'v10m', 'tcc')}
     pr6, rn6 = {}, {}
@@ -1333,7 +1336,7 @@ def ukmo_run(run, ready, steps_filter):
             f[k][st] = v
         derived(f, st)
 
-    res = progressive('ukmo', run, want, ready, fetch, steps_filter, budget=15 * 60)
+    res = progressive('ukmo', run, want, ready, fetch, steps_filter, budget=8 * 60)
     if not res:
         return
     steps, complete = res
