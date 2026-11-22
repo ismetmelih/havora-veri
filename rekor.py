@@ -114,6 +114,77 @@ def build_year(sts, year):
     return True
 
 
+IEM = 'https://mesonet.agron.iastate.edu'
+
+
+def iem_get(url, timeout):
+    """IEM ara sıra bağlantıyı keser ya da hızı sınırlar: birkaç kez dene"""
+    for k in range(4):
+        try:
+            return get(url, timeout)
+        except Exception:  # noqa: BLE001
+            if k == 3:
+                raise
+            time.sleep(20 * (k + 1))
+
+
+def build_iem(year):
+    """NOAA'nın yıl arşivi yoksa: Iowa Environmental Mesonet'in Türkiye havalimanı günlük özetleri (METAR'dan).
+    En yüksek/en düşük sıcaklık, en kuvvetli rüzgar ve hamle; basınç ve yağış yok. Kimlikler ICAO (LTxx)."""
+    feats = json.loads(iem_get(f'{IEM}/geojson/network/TR__ASOS.geojson', 120))['features']
+    # IEM yalnız şehir adını verir (ör. Ankara'da 4 meydan): canlı gözlemdeki tam ad yoksa "Ankara · LTAB"
+    names = {ft['id']: {'name': f"{(ft['properties'].get('sname') or ft['id']).title()} · {ft['id']}"} for ft in feats}
+    q = '&'.join(f'stations={sid}' for sid in names)
+    text = iem_get(f'{IEM}/cgi-bin/request/daily.py?network=TR__ASOS&{q}&year1={year}&month1=1&day1=1'
+               f'&year2={year}&month2=12&day2=31&format=csv', 300)
+    conv = {'tmax': ('max_temp_f', 'max', F2C), 'tmin': ('min_temp_f', 'min', F2C),
+            'wind': ('max_wind_speed_kts', 'max', KT2KMH), 'gust': ('max_wind_gust_kts', 'max', KT2KMH)}
+    rows = {}   # istasyon → gün → {büyüklük: değer}
+    for r in csv.DictReader(io.StringIO(text)):
+        sid, day = r.get('station'), r.get('day', '')
+        if not sid or len(day) < 10:
+            continue
+        vals = rows.setdefault(sid, {}).setdefault(day, {})
+        for key, (col, _, fn) in conv.items():
+            try:
+                vals[key] = fn(float(r[col]))
+            except (ValueError, TypeError, KeyError):
+                pass
+    data = {}
+    for sid, days in rows.items():
+        order = sorted(days)
+        for i, day in enumerate(order):
+            vals = days[day]
+            # Kalite denetimi: bozuk METAR'lar (ör. 52 °C, 130 km/sa tek rapor) rekor olmasın
+            for key in ('tmax', 'tmin'):
+                near = [days[d][key] for d in order[max(0, i - 3):i] + order[i + 1:i + 4] if key in days[d]]
+                if key in vals and (not -45 <= vals[key] <= 49 or (len(near) >= 3 and abs(vals[key] - sorted(near)[len(near) // 2]) > 12)):
+                    del vals[key]
+            near = [days[d]['wind'] for d in order[max(0, i - 3):i] + order[i + 1:i + 4] if 'wind' in days[d]]
+            # Sürekli rüzgar aynı günün hamlesinden büyük olamaz (ör. 54 knot rüzgar, 20 knot hamle: bozuk rapor)
+            if 'wind' in vals and (vals['wind'] > 120 or vals['wind'] > vals.get('gust', 999) + 9
+                                   or (len(near) >= 3 and vals['wind'] > 3 * sorted(near)[len(near) // 2] + 30)):
+                del vals['wind']
+            if 'gust' in vals and (vals['gust'] > 160 or vals['gust'] > 2.2 * vals.get('wind', 0) + 25):
+                del vals['gust']
+            m = data.setdefault(sid, {}).setdefault(day[5:7], {})
+            for key, (_, way, _) in conv.items():
+                v = vals.get(key)
+                if v is None:
+                    continue
+                cur = m.get(key)
+                if cur is None or (way == 'max' and v > cur[0]) or (way == 'min' and v < cur[0]):
+                    m[key] = [v, day]
+    if not data:
+        return False
+    os.makedirs(os.path.join(OUT, 'yil'), exist_ok=True)
+    with open(os.path.join(OUT, 'yil', f'{year}.json'), 'w', encoding='utf-8') as f:
+        json.dump({'year': year, 'built': time.strftime('%Y-%m-%d'), 'source': 'iem', 'names': names, 'stations': data},
+                  f, separators=(',', ':'), ensure_ascii=False)
+    print(f'Rekor: {year} yılı IEM havalimanı özetlerinden, {len(data)} istasyon')
+    return True
+
+
 def summarize(sts, years):
     names = {s['id']: s for s in sts}
     now = time.gmtime()
@@ -121,13 +192,18 @@ def summarize(sts, years):
     periods = {'ay': lambda y, m: y == cy and m == cm, 'yil': lambda y, m: y == cy,
                'bes': lambda y, m: y >= cy - 4, 'tum': lambda y, m: True}
     best = {p: {k: {} for k, *_ in VARS} for p in periods}
+    noaa = []   # NOAA arşivinden gelen yıllar (IEM ile doldurulanlar sayılmaz)
+    iem_names = {}
     for y in years:
         try:
             with open(os.path.join(OUT, 'yil', f'{y}.json'), encoding='utf-8') as f:
-                data = json.load(f)['stations']
+                doc = json.load(f)
         except (OSError, ValueError):
             continue
-        merge(best, periods, VARS, y, data)
+        iem_names.update(doc.get('names', {}))
+        if doc.get('source') != 'iem':
+            noaa.append(y)
+        merge(best, periods, VARS, y, doc['stations'])
     # Canlı gözlemlerden günlük uç değerler (havalimanı ölçümleri; NOAA arşivinin bittiği yerden sonrası)
     for y in range(cy - 4, cy + 1):
         try:
@@ -153,8 +229,10 @@ def summarize(sts, years):
                     if cur is None or (way == 'max' and v > cur[0]) or (way == 'min' and v < cur[0]):
                         mm[key] = [v, day]
         merge(best, periods, VARS, y, months)
+    for sid, nm in iem_names.items():   # canlı gözlemdeki tam havalimanı adı önceliklidir
+        names.setdefault(sid, nm)
     out = {'generated': time.strftime('%Y-%m-%dT%H:%MZ', time.gmtime()), 'years': [min(years) if years else cy, cy], 'periods': {}}
-    out['archive_end'] = max((y for y in years), default=None)
+    out['archive_end'] = max(noaa, default=None)
     _write(out, best, periods, names)
 
 
@@ -200,6 +278,14 @@ def main():
             if build_year(sts, y):
                 have.add(y)
                 changed = True
+            else:
+                # NOAA bu yılı yayınlamadı: havalimanı günlük özetleriyle doldur (yağış ve basınç yok)
+                try:
+                    if build_iem(y):
+                        have.add(y)
+                        changed = True
+                except Exception as e:  # noqa: BLE001
+                    print(f'Rekor: {y} IEM alınamadı', e)
     n = 0
     for y in range(cy - 1, ILK_YIL - 1, -1):
         if y in have or y == cy:

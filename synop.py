@@ -1,7 +1,7 @@
 """Türkiye SYNOP gözlemleri (MGM istasyonları, WMO blok 17): son ölçüm, bugünün en yüksek ve en düşük sıcaklığı,
 kar kalınlığı, 24 saatlik yağış, hamle.
 
-Kaynak: OGIMET (ogimet.com, WMO GTS üzerinden yayılan SYNOP raporları). Saatte bir son 26 saat alınır.
+Kaynak: OGIMET (ogimet.com, WMO GTS üzerinden yayılan SYNOP raporları). Saatte bir son 50 saat alınır (dünün en yüksek/en düşük sıcaklığı için).
 İstasyon adı ve konumu: OGIMET istasyon listesi (ayda bir).
 Çıktı: out/gozlem/synop.json
 """
@@ -152,7 +152,8 @@ def main():
         return
     meta = station_list()
     now = dt.datetime.utcnow()
-    text = get(SYN.format(b=f'{now - dt.timedelta(hours=26):%Y%m%d%H}00', e=f'{now:%Y%m%d%H}00'))
+    # 50 saat: dün (TSİ gece yarısından gece yarısına) günün her saatinde tam kapsansın
+    text = get(SYN.format(b=f'{now - dt.timedelta(hours=50):%Y%m%d%H}00', e=f'{now:%Y%m%d%H}00'))
     reports = {}
     for line in text.splitlines():
         p = line.split(',', 6)
