@@ -1,5 +1,215 @@
 [
  {
+  "k": "ibb-anadolu-hisari",
+  "n": "Anadolu Hisarı",
+  "il": "İstanbul",
+  "ilce": "Beykoz",
+  "la": 41.0823,
+  "lo": 29.0668,
+  "kat": "manzara",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/anadoluhisari.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/677e7821da6e0-3270.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/anadolu-hisari"
+ },
+ {
+  "k": "ibb-beyazit-kulesi",
+  "n": "Beyazıt Kulesi",
+  "il": "İstanbul",
+  "ilce": "Fatih",
+  "la": 41.0128,
+  "lo": 28.9649,
+  "kat": "manzara",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/beyazitkulesi1.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/677f6fc09dec0-7892.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/beyazit-kulesi"
+ },
+ {
+  "k": "ibb-beyazit-kulesi-2",
+  "n": "Beyazıt Kulesi 2",
+  "il": "İstanbul",
+  "ilce": "Fatih",
+  "la": 41.0128,
+  "lo": 28.9679,
+  "kat": "manzara",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/beyazitkulesi2.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/695cb950745c8-1664.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/beyazit-kulesi-2"
+ },
+ {
+  "k": "ibb-buyuk-camlica",
+  "n": "Büyük Çamlıca",
+  "il": "İstanbul",
+  "ilce": "Üsküdar",
+  "la": 41.0272,
+  "lo": 29.0681,
+  "kat": "manzara",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/buyukcamlica.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/677f7360ebb7a-481.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/buyuk-camlica"
+ },
+ {
+  "k": "ibb-dragos",
+  "n": "Dragos",
+  "il": "İstanbul",
+  "ilce": "Kartal",
+  "la": 40.9081,
+  "lo": 29.1442,
+  "kat": "manzara",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/dragos.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/677f770e373de-6405.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/dragos"
+ },
+ {
+  "k": "ibb-emirgan",
+  "n": "Emirgan Korusu",
+  "il": "İstanbul",
+  "ilce": "Sarıyer",
+  "la": 41.1058,
+  "lo": 29.0552,
+  "kat": "manzara",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/emirgan.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/695ccccb7d457-3590.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/emirgan"
+ },
+ {
+  "k": "ibb-eyup-sultan",
+  "n": "Eyüp Sultan",
+  "il": "İstanbul",
+  "ilce": "Eyüpsultan",
+  "la": 41.047,
+  "lo": 28.9348,
+  "kat": "sehir",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/eyupsultan.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/677f794bba9e3-7496.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/eyup-sultan"
+ },
+ {
+  "k": "ibb-hidiv-kasri",
+  "n": "Hidiv Kasrı: Boğaz",
+  "il": "İstanbul",
+  "ilce": "Beykoz",
+  "la": 41.1055,
+  "lo": 29.0729,
+  "kat": "manzara",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/hidivkasri.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/677f7ba28f1d5-8109.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/hidiv-kasri"
+ },
+ {
+  "k": "ibb-kiz-kulesi",
+  "n": "Kız Kulesi",
+  "il": "İstanbul",
+  "ilce": "Üsküdar",
+  "la": 41.0239,
+  "lo": 29.0035,
+  "kat": "manzara",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/kizkulesi.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/677f9cfd3c9ee-5339.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/kiz-kulesi"
+ },
+ {
+  "k": "ibb-pierre-loti",
+  "n": "Pierre Loti: Haliç",
+  "il": "İstanbul",
+  "ilce": "Eyüpsultan",
+  "la": 41.0538,
+  "lo": 28.9371,
+  "kat": "manzara",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/pierreloti.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/695cca876be48-3219.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/pierre-loti"
+ },
+ {
+  "k": "ibb-salacak",
+  "n": "Salacak",
+  "il": "İstanbul",
+  "ilce": "Üsküdar",
+  "la": 41.0229,
+  "lo": 29.0062,
+  "kat": "manzara",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/salacak.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/677fa9b441bcf-2290.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/salacak"
+ },
+ {
+  "k": "ibb-sarachane",
+  "n": "Saraçhane",
+  "il": "İstanbul",
+  "ilce": "Fatih",
+  "la": 41.0123,
+  "lo": 28.9554,
+  "kat": "sehir",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/sarachane.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/6784f45840bcc-3658.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/sarachane"
+ },
+ {
+  "k": "ibb-sultanahmet-2",
+  "n": "Sultanahmet",
+  "il": "İstanbul",
+  "ilce": "Fatih",
+  "la": 41.0068,
+  "lo": 28.979,
+  "kat": "sehir",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/sultanahmet2.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/695ccbdd21d74-5412.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/sultanahmet-2"
+ },
+ {
+  "k": "ibb-taksim-meydan",
+  "n": "Taksim",
+  "il": "İstanbul",
+  "ilce": "Beyoğlu",
+  "la": 41.038,
+  "lo": 28.9864,
+  "kat": "sehir",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/taksim.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/695ccacf0c2f4-6932.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/taksim-meydan"
+ },
+ {
+  "k": "ibb-ulus-parki",
+  "n": "Ulus Parkı: Boğaz",
+  "il": "İstanbul",
+  "ilce": "Beşiktaş",
+  "la": 41.0551,
+  "lo": 29.0329,
+  "kat": "manzara",
+  "tur": "hls",
+  "u": "https://kamerayayin.ibb.istanbul/turistikcam/ulusparki.stream/playlist.m3u8",
+  "img": "https://istanbuluseyret.ibb.istanbul/images/cameras/fullxfull/6784f98cee7cd-7268.jpg",
+  "src": "İBB · İstanbul'u Seyret",
+  "sayfa": "https://istanbuluseyret.ibb.istanbul/tr/turistik-kamera/ulus-parki"
+ },
+ {
   "k": "galata",
   "n": "Galata ve Kız Kulesi",
   "il": "İstanbul",
@@ -10,7 +220,8 @@
   "v": "xKaWhDoufbk",
   "c": "UCrRYP4a33Fvvd9j6TLtzj_Q",
   "t": "Galata",
-  "src": "Istanbul: Golden Horn Live"
+  "src": "Istanbul: Golden Horn Live",
+  "tur": "yt"
  },
  {
   "k": "goreme",
@@ -23,20 +234,8 @@
   "v": "Eo2CQkXXWWU",
   "c": "UCUwiUvWeYt_YliYWjqBhkeg",
   "t": "Cappadocia",
-  "src": "advisormapp"
- },
- {
-  "k": "rize-meydan",
-  "n": "Rize Cumhuriyet Meydanı",
-  "il": "Rize",
-  "ilce": "Merkez",
-  "la": 41.0248,
-  "lo": 40.5199,
-  "kat": "sehir",
-  "v": "ffaZExAkVC8",
-  "c": "UCRj7u6fmW8RYQl98hcwbwng",
-  "t": "Rize Merkez Meydan",
-  "src": "Joseph Shenouda"
+  "src": "advisormapp",
+  "tur": "yt"
  },
  {
   "k": "golyayla-yayla",
@@ -49,7 +248,8 @@
   "v": "Pje_kodX-bk",
   "c": "UC6H3j4ISxmeRty7zAZ4u0Gw",
   "t": "Yayla Hareketli - Kabahor",
-  "src": "Gölyayla Canlı Yayın 1"
+  "src": "Gölyayla Canlı Yayın 1",
+  "tur": "yt"
  },
  {
   "k": "golyayla-koy",
@@ -62,7 +262,8 @@
   "v": "2IKTnkw4YiA",
   "c": "UC6H3j4ISxmeRty7zAZ4u0Gw",
   "t": "Köy Hareketli - Kabahor",
-  "src": "Gölyayla Canlı Yayın 1"
+  "src": "Gölyayla Canlı Yayın 1",
+  "tur": "yt"
  },
  {
   "k": "golyayla-kapar",
@@ -75,7 +276,8 @@
   "v": "f05exr2Mej0",
   "c": "UC6H3j4ISxmeRty7zAZ4u0Gw",
   "t": "Kapar Hareketli - Kabahor",
-  "src": "Gölyayla Canlı Yayın 1"
+  "src": "Gölyayla Canlı Yayın 1",
+  "tur": "yt"
  },
  {
   "k": "golyayla-yanmislik",
@@ -88,7 +290,8 @@
   "v": "jAvjpkh8DeI",
   "c": "UC6H3j4ISxmeRty7zAZ4u0Gw",
   "t": "Yanmışlık Hareketli - Kabahor",
-  "src": "Gölyayla Canlı Yayın 1"
+  "src": "Gölyayla Canlı Yayın 1",
+  "tur": "yt"
  },
  {
   "k": "golyayla-merze",
@@ -101,7 +304,8 @@
   "v": "sRVRqp5RBEk",
   "c": "UCh19NKDcMZeq5Gnq3ugFRow",
   "t": "Merze Yukar",
-  "src": "Gölyayla Canlı Yayın 2"
+  "src": "Gölyayla Canlı Yayın 2",
+  "tur": "yt"
  },
  {
   "k": "golyayla-viraj",
@@ -114,7 +318,8 @@
   "v": "g9w1iXlDYKI",
   "c": "UC6H3j4ISxmeRty7zAZ4u0Gw",
   "t": "Gavuzoğulları Viraj - Kabahor",
-  "src": "Gölyayla Canlı Yayın 1"
+  "src": "Gölyayla Canlı Yayın 1",
+  "tur": "yt"
  },
  {
   "k": "golyayla-giris",
@@ -127,20 +332,8 @@
   "v": "p7QP1TA062U",
   "c": "UC6H3j4ISxmeRty7zAZ4u0Gw",
   "t": "Köy Giriş Uzak - Kabahor",
-  "src": "Gölyayla Canlı Yayın 1"
- },
- {
-  "k": "kumbet",
-  "n": "Kümbet Yaylası",
-  "il": "Giresun",
-  "ilce": "Dereli",
-  "la": 40.5596,
-  "lo": 38.4372,
-  "kat": "yayla",
-  "v": "ntq3oJehnY8",
-  "c": "UCRaLemo6M0haUrwGWTQoM1A",
-  "t": "^Kümbet Yaylası Merkez",
-  "src": "Hasan Yayında"
+  "src": "Gölyayla Canlı Yayın 1",
+  "tur": "yt"
  },
  {
   "k": "kumbet-uzundere",
@@ -153,7 +346,8 @@
   "v": "RpzCSvAzbd4",
   "c": "UCB1KVRoSsisDhFR4XLM6Kng",
   "t": "^Kümbet Canlı Yayın Uzundere",
-  "src": "Hasan Yayında Yaylalar"
+  "src": "Hasan Yayında Yaylalar",
+  "tur": "yt"
  },
  {
   "k": "bektas",
@@ -166,7 +360,8 @@
   "v": "mcwNJM9qrCs",
   "c": "UCRaLemo6M0haUrwGWTQoM1A",
   "t": "^Bektaş Yaylası Canlı Yayın$",
-  "src": "Hasan Yayında"
+  "src": "Hasan Yayında",
+  "tur": "yt"
  },
  {
   "k": "kulakkaya",
@@ -179,7 +374,8 @@
   "v": "gD2CwVY0NmA",
   "c": "UCRaLemo6M0haUrwGWTQoM1A",
   "t": "^Kulakkaya Yaylası\\s+Canlı Yayın",
-  "src": "Hasan Yayında"
+  "src": "Hasan Yayında",
+  "tur": "yt"
  },
  {
   "k": "pasakonagi",
@@ -192,20 +388,8 @@
   "v": "ORXTMvi90cc",
   "c": "UCRaLemo6M0haUrwGWTQoM1A",
   "t": "^Paşakonağı Yaylası\\s+Canlı Yayın",
-  "src": "Hasan Yayında"
- },
- {
-  "k": "bulancak-meydan",
-  "n": "Bulancak Meydanı",
-  "il": "Giresun",
-  "ilce": "Bulancak",
-  "la": 40.9389,
-  "lo": 38.2318,
-  "kat": "sehir",
-  "v": "AyaQrdCgX_s",
-  "c": "UCRaLemo6M0haUrwGWTQoM1A",
-  "t": "^Bulancak Meydan Canlı Yayın",
-  "src": "Hasan Yayında"
+  "src": "Hasan Yayında",
+  "tur": "yt"
  },
  {
   "k": "bulancak-manzara",
@@ -218,7 +402,8 @@
   "v": "BUj2xI8N-vI",
   "c": "UCRaLemo6M0haUrwGWTQoM1A",
   "t": "^Bulancak Giresun Manzara",
-  "src": "Hasan Yayında"
+  "src": "Hasan Yayında",
+  "tur": "yt"
  },
  {
   "k": "giresun-kale",
@@ -231,7 +416,8 @@
   "v": "MMw0F-b-Q7c",
   "c": "UCRaLemo6M0haUrwGWTQoM1A",
   "t": "^Giresun Kalesi Canlı Yayın",
-  "src": "Hasan Yayında"
+  "src": "Hasan Yayında",
+  "tur": "yt"
  },
  {
   "k": "guce-doner",
@@ -244,33 +430,8 @@
   "v": "JSe4fEYSh2U",
   "c": "UCCNJc-Fx-xz5Kquksih0TzA",
   "t": "^Güce Hareketli Kamera",
-  "src": "Hasan Yayında Kameralar"
- },
- {
-  "k": "guce-meydan",
-  "n": "Güce Meydanı",
-  "il": "Giresun",
-  "ilce": "Güce",
-  "la": 40.8965,
-  "lo": 38.8105,
-  "kat": "sehir",
-  "v": "uydB4EjICT0",
-  "c": "UCCNJc-Fx-xz5Kquksih0TzA",
-  "t": "^Güce Meydan Canlı Yayın",
-  "src": "Hasan Yayında Kameralar"
- },
- {
-  "k": "alucra",
-  "n": "Alucra: Belediye önü",
-  "il": "Giresun",
-  "ilce": "Alucra",
-  "la": 40.3196,
-  "lo": 38.7651,
-  "kat": "sehir",
-  "v": "MKA6FnoTCOY",
-  "c": "UCCNJc-Fx-xz5Kquksih0TzA",
-  "t": "^Alucra Canlı Yayın Belediye",
-  "src": "Hasan Yayında Kameralar"
+  "src": "Hasan Yayında Kameralar",
+  "tur": "yt"
  },
  {
   "k": "kovanlik",
@@ -283,7 +444,8 @@
   "v": "ENIE1QX2JGU",
   "c": "UCYQcGHwAQABD8SbXv1-R2KA",
   "t": "^Kovanlık Canlı Yayın",
-  "src": "Hasan Yayında Beldeler"
+  "src": "Hasan Yayında Beldeler",
+  "tur": "yt"
  },
  {
   "k": "kiziltas",
@@ -296,7 +458,8 @@
   "v": "IST5-eLvVqE",
   "c": "UCYQcGHwAQABD8SbXv1-R2KA",
   "t": "^Kızıltaş Köyü Canlı Yayın",
-  "src": "Hasan Yayında Beldeler"
+  "src": "Hasan Yayında Beldeler",
+  "tur": "yt"
  },
  {
   "k": "osmaniye",
@@ -309,7 +472,8 @@
   "v": "HiTMTb3JrKY",
   "c": "UC0mzEl3xtDs59izgIaWSW4g",
   "t": "^OSMANİYE KÖYÜ HAREKETLİ",
-  "src": "Giresun Merkez Köyleri"
+  "src": "Giresun Merkez Köyleri",
+  "tur": "yt"
  },
  {
   "k": "okcu",
@@ -322,7 +486,8 @@
   "v": "0j0IvBwsCLs",
   "c": "UC0mzEl3xtDs59izgIaWSW4g",
   "t": "^OKÇU KÖYÜ CANLI YAYIN 1$",
-  "src": "Giresun Merkez Köyleri"
+  "src": "Giresun Merkez Köyleri",
+  "tur": "yt"
  },
  {
   "k": "yavuzkemal",
@@ -335,7 +500,8 @@
   "v": "FM35HcrgAcE",
   "c": "UCtElio-PQAcxZbKdAir4_Hw",
   "t": "Yuva Köyü Canlı Kamera 1",
-  "src": "MAGMAG"
+  "src": "MAGMAG",
+  "tur": "yt"
  },
  {
   "k": "kesap-guneykoy",
@@ -348,7 +514,8 @@
   "v": "MVNsoOK7Xog",
   "c": "UCwhRHIjG4l2oYGHkHaKFy5A",
   "t": "Güneyköy",
-  "src": "Keşap Güneyköy"
+  "src": "Keşap Güneyköy",
+  "tur": "yt"
  },
  {
   "k": "kesap",
@@ -361,20 +528,8 @@
   "v": "lfJ4pEI_VBk",
   "c": "UCnNnhgdt28Azq1HPMtKsLNg",
   "t": "^KEŞAP$",
-  "src": "Keşap Belediyesi"
- },
- {
-  "k": "erbaa",
-  "n": "Erbaa: Seyrantepe",
-  "il": "Tokat",
-  "ilce": "Erbaa",
-  "la": 40.6727,
-  "lo": 36.5715,
-  "kat": "sehir",
-  "v": "qUsHfBiVFdE",
-  "c": "UCKRILTo_VTbb0GwY3bcthFw",
-  "t": "Seyrantepe",
-  "src": "Kenan Kesmez"
+  "src": "Keşap Belediyesi",
+  "tur": "yt"
  },
  {
   "k": "pinarbeyli",
@@ -387,7 +542,8 @@
   "v": "jT0Z6hld5fw",
   "c": "UCD2RmMbZ0-Wsigb_kUJFSCg",
   "t": "\\(1\\) Pınarbeyli",
-  "src": "Kenan Kesmez 2"
+  "src": "Kenan Kesmez 2",
+  "tur": "yt"
  },
  {
   "k": "tufanbeyli",
@@ -400,19 +556,7 @@
   "v": "Vf14Iyj2tGw",
   "c": "UCdSoVb1JpVTNoGLnc6WptGA",
   "t": "Tufanbeyli",
-  "src": "Şar Comana netTV"
- },
- {
-  "k": "devrek",
-  "n": "Devrek",
-  "il": "Zonguldak",
-  "ilce": "Devrek",
-  "la": 41.2188,
-  "lo": 31.9558,
-  "kat": "sehir",
-  "v": "Rtnqsu-RRjM",
-  "c": "UCfFX6PtRQGLulexxQH7QGXA",
-  "t": "DEVREK",
-  "src": "Devrek Belediyesi"
+  "src": "Şar Comana netTV",
+  "tur": "yt"
  }
 ]
