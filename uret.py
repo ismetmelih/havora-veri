@@ -524,7 +524,7 @@ def candidates(model, ready, hours=(0, 6, 12, 18)):
 
 
 # Hazır adımlar bu kadar kanaldan aynı anda indirilir (GEM ve UKMO kendi içinde paralel)
-PARALLEL = {'gfs': 4, 'icon': 4, 'ecmwf': 3, 'aifs': 3, 'ens': 2, 'gem': 3}
+PARALLEL = {'gfs': 4, 'icon': 4, 'ecmwf': 3, 'aifs': 3, 'ens': 2, 'gem': 3, 'gefs': 3, 'gefsk': 3}
 LOCK = os.path.join(os.path.dirname(OUT), '.yazim.lock')
 
 
@@ -726,6 +726,98 @@ def gfs_run(run, ready, steps_filter):
         prev = st
     accumulations(f, steps, cum, cum_snow)
     write('gfs', run, steps, f, {'name': 'GFS', 'source': 'NOAA NCEP', 'resolution': '0,25°', 'complete': complete, 'expected': want[-1]}, diag=diag)
+
+
+# ---------------------------------------------------------------- GEFS (NOAA topluluğu): ortalama ve kontrol senaryosu
+# Canlı haritada GFS için "Ana senaryo (GFS) · Ortalama · Kontrol" seçimi. 0,5° ızgara, Türkiye ve Avrupa kutusu.
+
+GEFS_KIND = {'gefs': ('geavg', 'GEFS ortalaması', '31 senaryonun ortalaması'), 'gefsk': ('gec00', 'GEFS kontrol', 'bozulmamış başlangıçlı senaryo')}
+
+
+def gefs_url(run, kind, st, idx=False):
+    d = f'gefs.{run:%Y%m%d}/{run:%H}/atmos/pgrb2ap5'
+    return f'{GFS_BASE}/pub/data/nccf/com/gens/prod/{d}/{kind}.t{run:%H}z.pgrb2a.0p50.f{st:03d}' + ('.idx' if idx else '')
+
+
+def gefs_model(model):
+    def run_all(steps_filter=None):
+        kind = GEFS_KIND[model][0]
+
+        def ready(run, st):
+            return exists(gefs_url(run, kind, st, idx=True))
+
+        for run in candidates(model, ready):
+            gefs_run(run, ready, steps_filter, model, kind)
+    return run_all
+
+
+def gefs_run(run, ready, steps_filter, model, kind):
+    rid = f'{run:%Y%m%d%H}'
+    want = steps_filter or standard_steps(384)
+    f = {k: {} for k in ('t850', 'z850', 'z500', 't500', 'mslp', 't2m', 'sdep', 'z1000', 'thk', 'ptype', 'u250', 'v250', 'ws250',
+                         'rh700', 'pwat', 'u10m', 'v10m', 'tcc')}
+    bucket = {}   # adım → (dilim başı, yağış, kar payı); toplamlar sonra sırayla kurulur
+
+    def fetch(st):
+        q = (f'dir=%2Fgefs.{run:%Y%m%d}%2F{run:%H}%2Fatmos%2Fpgrb2ap5&file={kind}.t{run:%H}z.pgrb2a.0p50.f{st:03d}'
+             '&var_TMP=on&var_HGT=on&var_PRMSL=on&var_APCP=on&var_CSNOW=on&var_CRAIN=on&var_CFRZR=on&var_CICEP=on&var_SNOD=on'
+             '&var_UGRD=on&var_VGRD=on&var_RH=on&var_PWAT=on&var_TCDC=on'
+             '&lev_1000_mb=on&lev_850_mb=on&lev_700_mb=on&lev_500_mb=on&lev_250_mb=on&lev_mean_sea_level=on&lev_surface=on'
+             '&lev_2_m_above_ground=on&lev_10_m_above_ground=on&lev_entire_atmosphere=on'
+             '&lev_entire_atmosphere_%5C%28considered_as_a_single_layer%5C%29=on'
+             '&subregion=&toplat=72&leftlon=-50&rightlon=70&bottomlat=20')
+
+        def dl():
+            time.sleep(0.6)  # NOMADS'a nazik ol
+            return get(f'{GFS_BASE}/cgi-bin/filter_gefs_atmos_0p50a.pl?{q}')
+        flags, tp, start = {}, None, 0
+        for name, ltype, lev, vals, lats, lons, st0 in messages(cached(f'{model}/{rid}/{st}', dl)):
+            a = subset_interp(vals, lats, lons)     # 0,5° → bölge ızgaraları (çift doğrusal)
+            if ltype == 'isobaricInhPa':
+                if name == 't' and lev in (850, 500):
+                    f[f't{lev}'][st] = a - 273.15
+                elif name == 'gh' and lev in (1000, 850, 500):
+                    f[f'z{lev}'][st] = a
+                elif name in ('u', 'v') and lev == 250:
+                    f[f'{name}250'][st] = a
+                elif name == 'r' and lev == 700:
+                    f['rh700'][st] = a
+            elif name == 'prmsl':
+                f['mslp'][st] = a / 100
+            elif name == '2t':
+                f['t2m'][st] = a - 273.15
+            elif name in ('10u', '10v'):
+                f[f'{name[2]}10m'][st] = a
+            elif name == 'sde':
+                f['sdep'][st] = a * 100
+            elif name == 'pwat':
+                f['pwat'][st] = a
+            elif name == 'tcc':
+                f['tcc'][st] = a
+            elif name == 'tp':
+                tp, start = a, st0
+            elif name in ('crain', 'csnow', 'cfrzr', 'cicep'):
+                flags[name] = a          # dilim boyunca ortalama (ortalamada: senaryoların payı)
+        if st > 0 and tp is not None:
+            bucket[st] = (start, np.maximum(tp, 0), np.clip(flags.get('csnow', 0), 0, 1))
+            f['ptype'][st] = ptype_code(flags.get('crain'), flags.get('csnow'), flags.get('cfrzr'), flags.get('cicep'))
+        derived(f, st)
+
+    res = progressive(model, run, want, ready, fetch, steps_filter)
+    if not res:
+        return
+    steps, complete = res
+    zero = np.zeros(NPTS)
+    cum, cum_snow = {0: zero}, {0: zero}
+    for st in sorted(steps):
+        if st in bucket and bucket[st][0] in cum:
+            s0, pr, sn = bucket[st]
+            cum[st] = cum[s0] + pr
+            cum_snow[st] = cum_snow[s0] + pr * sn
+    accumulations(f, steps, cum, cum_snow)
+    name, desc = GEFS_KIND[model][1], GEFS_KIND[model][2]
+    write(model, run, steps, f, {'name': name, 'source': 'NOAA NCEP GEFS', 'resolution': '0,5°', 'note': desc,
+                                 'complete': complete, 'expected': want[-1]}, regions=('tr', 'eu'))
 
 
 # ---------------------------------------------------------------- ECMWF (açık veri)
@@ -1304,7 +1396,7 @@ def write_index():
 
 def _write_index():
     models_meta = {}
-    for m in ('gfs', 'ecmwf', 'icon', 'ens', 'aifs', 'gem', 'ukmo'):
+    for m in ('gfs', 'ecmwf', 'icon', 'ens', 'aifs', 'gem', 'ukmo', 'gefs', 'gefsk'):
         runs = []
         for r in runs_of(m):
             with open(os.path.join(OUT, m, r, 'meta.json'), encoding='utf-8') as mf:
@@ -1336,7 +1428,8 @@ def main():
     failed = []
     for m in models:
         try:
-            {'gfs': gfs, 'ecmwf': ecmwf, 'icon': icon, 'ens': ens, 'aifs': aifs, 'gem': gem, 'ukmo': ukmo}[m](steps)
+            {'gfs': gfs, 'ecmwf': ecmwf, 'icon': icon, 'ens': ens, 'aifs': aifs, 'gem': gem, 'ukmo': ukmo,
+             'gefs': gefs_model('gefs'), 'gefsk': gefs_model('gefsk')}[m](steps)
         except Exception as e:  # noqa: BLE001 — bir model hata verirse diğerleri yine üretilsin
             log(m, 'HATA', repr(e))
             failed.append(m)
