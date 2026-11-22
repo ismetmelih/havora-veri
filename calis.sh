@@ -53,6 +53,8 @@ dongu() {
 # Yan işler (gözlemler, arşivler): her biri kendi sıklığını dosya yaşına göre denetler
 dongu yan 900 25 "python gozlem.py" "python synop.py" "python rekor.py" "python iklim.py" "python analog.py" \
   "python strat.py" "python nmme.py" "python deniz.py" "python yagis.py" "python kis.py" "python normal.py" "python rossby.py" "python aam.py" &
+# MGM istasyonları (canlı gözlem haritası): 5 dakikada bir bakılır, ölçümler ~10 dakikada bir yazılır
+dongu gozlem 300 10 "python mgm.py" &
 # NOAA GFS ve DWD ICON: koşudan ~3,5 saat sonra saat saat gelir, 5 dakikada bir bakılır
 dongu hizli 300 25 "python uret.py gfs" "python uret.py icon" &
 # ECMWF, AIFS ve ENS
