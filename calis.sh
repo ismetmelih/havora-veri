@@ -22,7 +22,7 @@ yayinla() {
     flock 9
     cd out || exit 0
     # -uall: yeni klasördeki dosyalar da (ör. ilk kez yazılan endeks/meta.json) tek tek görünsün
-    if [ -d .git ] && [ -z "$(git status --porcelain -uall -- '*/meta.json' 'gozlem/*' 'rekor/*' 'iklim/*' 'analiz/*' 'strat/*' 'deniz/*')" ]; then
+    if [ -d .git ] && [ -z "$(git status --porcelain -uall -- '*/meta.json' 'gozlem/*' 'rekor/*' 'iklim/*' 'analiz/*' 'strat/*' 'deniz/*' 'kamera/*')" ]; then
       exit 0
     fi
     rm -rf .git
@@ -53,6 +53,8 @@ dongu() {
 # Yan işler (gözlemler, arşivler): her biri kendi sıklığını dosya yaşına göre denetler
 dongu yan 900 25 "python gozlem.py" "python synop.py" "python rekor.py" "python iklim.py" "python analog.py" \
   "python strat.py" "python nmme.py" "python deniz.py" "python yagis.py" "python kis.py" "python normal.py" "python rossby.py" "python aam.py" &
+# Canlı kameralar: saatte bir yayın adresleri denetlenir (kamera.py kendi sıklığını dosya yaşına göre tutar)
+dongu kamera 600 5 "python kamera.py" &
 # MGM istasyonları (canlı gözlem haritası): 5 dakikada bir bakılır, ölçümler ~10 dakikada bir yazılır
 dongu gozlem 300 10 "python mgm.py" &
 # NOAA GFS ve DWD ICON: koşudan ~3,5 saat sonra saat saat gelir, 5 dakikada bir bakılır
