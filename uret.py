@@ -116,7 +116,7 @@ PROF_LEVELS = [1, 2, 3, 5, 7, 10, 20, 30, 50, 70, 100, 150, 200, 250, 300, 500, 
 ARCHIVE_DAYS = 60   # geçmiş analiz arşivi (ECMWF 00Z/12Z başlangıç haritaları) kaç gün saklanır
 
 KEEP = 4         # model başına saklanan koşu sayısı
-MIN_H = 12       # yeni koşu, ilk bu kadar saati hazır olunca yayınlanır (kalanı geldikçe eklenir)
+MIN_H = 6        # yeni koşu, ilk bu kadar saati hazır olunca yayınlanır (kalanı geldikçe eklenir)
 FIRST_STEPS = 24  # yeni koşunun ilk yazımında en çok bu kadar adım (kalanı sonraki turda)
 # Koşunun meta.json → series'inde olması gereken hesaplar; eksikse koşu yeniden işlenir
 SERIES_NEEDED = {'gfs': ('vt100', 'wave1_10', 'u60_prof'), 'ecmwf': ('vt100', 'wave1_10')}
