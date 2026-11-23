@@ -53,7 +53,7 @@ dongu() {
 # Yan işler (gözlemler, arşivler): her biri kendi sıklığını dosya yaşına göre denetler
 dongu yan 900 25 "python gozlem.py" "python synop.py" "python rekor.py" "python iklim.py" "python analog.py" \
   "python strat.py" "python nmme.py" "python deniz.py" "python yagis.py" "python kis.py" "python normal.py" "python rossby.py" "python aam.py" \
-  "python kar_olasilik.py" &
+  "python kar_olasilik.py" "python senaryo_kar.py" &
 # Canlı kameralar: saatte bir yayın adresleri denetlenir (kamera.py kendi sıklığını dosya yaşına göre tutar)
 dongu kamera 600 5 "python kamera.py" &
 # MGM istasyonları (canlı gözlem haritası): 5 dakikada bir bakılır, ölçümler ~10 dakikada bir yazılır
