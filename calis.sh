@@ -22,7 +22,7 @@ yayinla() {
     flock 9
     cd out || exit 0
     # -uall: yeni klasördeki dosyalar da (ör. ilk kez yazılan endeks/meta.json) tek tek görünsün
-    if [ -d .git ] && [ -z "$(git status --porcelain -uall -- '*/meta.json' 'gozlem/*' 'rekor/*' 'iklim/*' 'analiz/*' 'strat/*' 'deniz/*' 'kamera/*' 'kar/*')" ]; then
+    if [ -d .git ] && [ -z "$(git status --porcelain -uall -- '*/meta.json' 'gozlem/*' 'rekor/*' 'iklim/*' 'analiz/*' 'strat/*' 'deniz/*' 'kamera/*' 'kar/*' 'yildirim/*')" ]; then
       exit 0
     fi
     rm -rf .git
@@ -56,6 +56,8 @@ dongu yan 900 25 "python gozlem.py" "python synop.py" "python rekor.py" "python 
   "python kar_olasilik.py" &
 # Senaryo haritaları (ECMWF ENS, AIFS ENS, GEFS, GEPS): 10 dakikada bir yeni koşuya bakılır; yeni koşu yoksa birkaç istekle biter
 dongu senaryo 600 30 "python senaryo_kar.py" &
+# Gerçek yıldırım (EUMETSAT MTG LI): 10 dakikalık paketler ~1–2 dakika sonra yayımlanır; 90 sn'de bir bakılır
+dongu yildirim 90 10 "python yildirim.py" &
 # Canlı kameralar: saatte bir yayın adresleri denetlenir (kamera.py kendi sıklığını dosya yaşına göre tutar)
 dongu kamera 600 5 "python kamera.py" &
 # MGM istasyonları (canlı gözlem haritası): 5 dakikada bir bakılır, ölçümler ~10 dakikada bir yazılır

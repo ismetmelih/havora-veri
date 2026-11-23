@@ -31,4 +31,6 @@ jobs:
       - name: Uret ve yayinla
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EUMETSAT_KEY: ${{ secrets.EUMETSAT_KEY }}
+          EUMETSAT_SECRET: ${{ secrets.EUMETSAT_SECRET }}
         run: bash calis.sh

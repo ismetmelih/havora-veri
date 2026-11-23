@@ -26,7 +26,7 @@ UA = {'User-Agent': 'havaxpro-veri/1.0'}
 
 
 def log(*a):
-    print(dt.datetime.utcnow().strftime('%H:%M:%S'), 'yildirim', *a, flush=True)
+    print(dt.datetime.now(dt.timezone.utc).strftime('%H:%M:%S'), 'yildirim', *a, flush=True)
 
 
 def http(url, data=None, headers=None, timeout=120):
@@ -92,7 +92,7 @@ def parse(raw):
                     if isinstance(obj, h5py.Dataset):
                         log('  değişken', name, obj.shape, obj.dtype, {k: (v.decode() if isinstance(v, bytes) else (v.tolist() if hasattr(v, 'tolist') else v)) for k, v in obj.attrs.items() if k in ('units', 'scale_factor', 'add_offset', '_FillValue', 'long_name')})
                 h.visititems(show)
-            g = h['data'] if 'data' in h else h
+            g = h['data'] if 'data' in h else h        # LFL: değişkenler kökte
             lat, lon = read_var(g['latitude']), read_var(g['longitude'])
             tv = g['flash_time']
             t = read_var(tv)
@@ -137,7 +137,7 @@ def main():
             continue
         m = (lon >= BOX[0]) & (lon <= BOX[1]) & (lat >= BOX[2]) & (lat <= BOX[3]) & np.isfinite(ts)
         if '--dene' in sys.argv:
-            log('paket', end, 'toplam çakma', len(lon), 'bölgede', int(m.sum()), 'zaman aralığı', dt.datetime.utcfromtimestamp(np.nanmin(ts)).isoformat() if len(ts) else '-', dt.datetime.utcfromtimestamp(np.nanmax(ts)).isoformat() if len(ts) else '-')
+            log('paket', end, 'toplam çakma', len(lon), 'bölgede', int(m.sum()), 'zaman aralığı', dt.datetime.fromtimestamp(np.nanmin(ts), dt.timezone.utc).isoformat() if len(ts) else '-', dt.datetime.fromtimestamp(np.nanmax(ts), dt.timezone.utc).isoformat() if len(ts) else '-')
             continue
         flashes += [[round(float(a), 3), round(float(b), 3), int(c), round(float(d), 1) if np.isfinite(d) else 0] for a, b, c, d in zip(lon[m], lat[m], ts[m], rad[m])]
         done.add(pid); new += 1
@@ -146,7 +146,7 @@ def main():
         return
     flashes = sorted((f for f in flashes if f[2] > time.time() - KEEP), key=lambda f: f[2])
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    out = {'generated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'), 'kaynak': 'EUMETSAT MTG LI-2-LFL (Lightning Flashes)',
+    out = {'generated': dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'kaynak': 'EUMETSAT MTG LI-2-LFL (Lightning Flashes)',
            'son_paket': plist[0][2] if plist else None, 'paketler': [p for p, _, _ in plist if p in done], 'flashes': flashes}
     if new or not os.path.exists(OUT):
         with open(OUT, 'w', encoding='utf-8') as fh:
