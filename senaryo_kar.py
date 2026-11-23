@@ -1,10 +1,10 @@
 """Senaryo kar haritaları: ECMWF ENS ve AIFS ENS'in her senaryosu için 3, 7 ve 15 günlük toplam kar (Türkiye, 0,25°).
 
-Kaynak: ECMWF açık verisi (CC BY 4.0), "sf" (kar yağışı, koşu başından beri birikmiş, m su eşdeğeri).
+Kaynak: ECMWF açık verisi (CC BY 4.0), "sf" (kar yağışı) ve "tp" (toplam yağış), koşu başından beri birikmiş.
 Birikmiş olduğu için yalnız 72, 168 ve 360. saatler indirilir; .index ile yalnız sf mesajları (bayt aralığı).
 Çıktı:
   out/kar/senaryo.json            kutu, pencereler, modeller (koşu, senaryo numaraları)
-  out/kar/senaryo-<model>.bin.gz  [senaryo][pencere][enlem][boylam] uint8, q = √cm × 12 (en çok 255 ≈ 450 cm)
+  out/kar/senaryo-<model>.bin.gz (kar, cm) ve senaryo-<model>-yagis.bin.gz (yağış, mm): [senaryo][pencere][enlem][boylam] uint8, q = √değer × 12 (en çok 255 ≈ 450)
 10:1 oranıyla 1 mm su ≈ 1 cm kar. 6 saatte bir yenilenir (yalnız 00Z/12Z koşuları 15 gün).
 """
 import datetime as dt
@@ -73,6 +73,7 @@ def crop(msg):
             la1, lo1 = eccodes.codes_get(g, 'latitudeOfFirstGridPointInDegrees'), eccodes.codes_get(g, 'longitudeOfFirstGridPointInDegrees')
             di, dj = eccodes.codes_get(g, 'iDirectionIncrementInDegrees'), eccodes.codes_get(g, 'jDirectionIncrementInDegrees')
             num = int(eccodes.codes_get(g, 'number'))
+            par = eccodes.codes_get(g, 'shortName')
             # IFS: m su eşdeğeri, AIFS: kg/m² (= mm) → cm kar (10:1, 1 mm su ≈ 1 cm)
             k = 1.0 if str(eccodes.codes_get(g, 'units')).startswith('kg') else 1000.0
             vals = eccodes.codes_get_values(g).reshape(nj, ni)
@@ -82,7 +83,7 @@ def crop(msg):
     lons = (lo1 + np.arange(ni) * di + 180) % 360 - 180
     yi = [int(np.argmin(np.abs(lats - (BOX['n'] - k * BOX['step'])))) for k in range(NY)]
     xi = [int(np.argmin(np.abs(lons - (BOX['w'] + k * BOX['step'])))) for k in range(NX)]
-    return num, vals[np.ix_(yi, xi)] * k
+    return par, num, vals[np.ix_(yi, xi)] * k
 
 
 def model(key, product, kinds, name):
@@ -95,10 +96,10 @@ def model(key, product, kinds, name):
     if os.path.exists(meta_path):
         with open(meta_path, encoding='utf-8') as fh:
             old = json.load(fh)
-        if old.get('models', {}).get(key, {}).get('run') == rid and os.path.exists(os.path.join(OUT, f'senaryo-{key}.bin.gz')):
+        if old.get('models', {}).get(key, {}).get('run') == rid and os.path.exists(os.path.join(OUT, f'senaryo-{key}-yagis.bin.gz')):
             log(name, rid, 'zaten var')
             return old['models'][key]
-    by = {}   # senaryo no → [pencere] dizi
+    by = {'sf': {}, 'tp': {}}   # alan → senaryo no → [pencere] dizi (kar cm, yağış mm)
     for wi, step in enumerate(STEPS):
         jobs = []
         for kind in kinds:
@@ -107,23 +108,25 @@ def model(key, product, kinds, name):
                 if not line.strip():
                     continue
                 r = json.loads(line)
-                if r.get('param') == 'sf':
+                if r.get('param') in ('sf', 'tp'):
                     jobs.append((f'{s}.grib2', r['_offset'], r['_offset'] + r['_length'] - 1))
         with ThreadPoolExecutor(8) as ex:
-            for num, a in ex.map(lambda j: crop(get(j[0], (j[1], j[2]))), jobs):
-                by.setdefault(num, [None] * len(STEPS))[wi] = a
+            for par, num, a in ex.map(lambda j: crop(get(j[0], (j[1], j[2]))), jobs):
+                if par in by:
+                    by[par].setdefault(num, [None] * len(STEPS))[wi] = a
         log(name, rid, f'+{step} sa', len(jobs), 'senaryo')
-    nums = sorted(n for n, w in by.items() if all(x is not None for x in w))
+    nums = sorted(n for n, w in by['sf'].items() if all(x is not None for x in w) and all(x is not None for x in by['tp'].get(n, [None])))
     if not nums:
         return None
-    arr = np.zeros((len(nums), len(STEPS), NY, NX), dtype=np.uint8)
-    for i, n in enumerate(nums):
-        for wi in range(len(STEPS)):
-            cm = np.clip(by[n][wi], 0, None)    # cm kar (crop birimi çevirdi)
-            arr[i, wi] = np.clip(np.round(np.sqrt(cm) * 12), 0, 255).astype(np.uint8)
-    with gzip.open(os.path.join(OUT, f'senaryo-{key}.bin.gz'), 'wb', compresslevel=9) as fh:
-        fh.write(arr.tobytes())
-    return {'name': name, 'run': rid, 'members': nums}
+    for par, suffix in (('sf', ''), ('tp', '-yagis')):
+        arr = np.zeros((len(nums), len(STEPS), NY, NX), dtype=np.uint8)
+        for i, n in enumerate(nums):
+            for wi in range(len(STEPS)):
+                v = np.clip(by[par][n][wi], 0, None)    # kar cm ya da yağış mm (crop birimi çevirdi)
+                arr[i, wi] = np.clip(np.round(np.sqrt(v) * 12), 0, 255).astype(np.uint8)
+        with gzip.open(os.path.join(OUT, f'senaryo-{key}{suffix}.bin.gz'), 'wb', compresslevel=9) as fh:
+            fh.write(arr.tobytes())
+    return {'name': name, 'run': rid, 'members': nums, 'fields': ['kar', 'yagis']}
 
 
 def main():
