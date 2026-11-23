@@ -1,9 +1,10 @@
-"""Kar olasılığı: 81 il merkezinde topluluk (ensemble) tahminlerinin her senaryosu için günlük kar toplamı.
+"""Kar ve yağış olasılığı: 81 il merkezinde topluluk (ensemble) tahminlerinin her senaryosu için günlük kar ve yağış toplamı.
 
 Kaynak: Open-Meteo topluluk API'si (ECMWF ENS 51, ECMWF AIFS ENS, NOAA GEFS 31, Kanada GEPS); saatlik kar (cm).
 Çıktı: out/kar/olasilik.json
     { generated, days: [YYYY-MM-DD ×15], models: { key: { name, members, run } },
-      il: { key: [ [ [gün1, gün2, …] her senaryo ] her il (plaka sırası) ] } }   değerler: cm × 10 (tamsayı)
+      il: { key: [ [ [gün1, gün2, …] her senaryo ] her il (plaka sırası) ] },   kar, cm × 10 (tamsayı)
+      yagis: { aynı biçim } }                                                  toplam yağış, mm × 10
 Sayfa (kar-olasilik.html) eşik ve süreyi kendisi seçer: olasılık = eşiği aşan senaryoların payı.
 Open-Meteo bu istekleri ağır sayar (dakikalık sınır): modeller arasında 70 sn beklenir; 4 saatte bir yenilenir.
 """
@@ -43,12 +44,14 @@ def get(url, timeout=180):
 
 def main():
     if os.path.exists(OUT) and time.time() - os.path.getmtime(OUT) < 4 * 3600:
-        log('güncel')
-        return
+        with open(OUT, encoding='utf-8') as fh:
+            if json.load(fh).get('yagis'):
+                log('güncel')
+                return
     now = dt.datetime.utcnow() + dt.timedelta(hours=3)   # TSİ
     days = [(now + dt.timedelta(days=k)).strftime('%Y-%m-%d') for k in range(DAYS)]
     hour0 = now.strftime('%Y-%m-%dT%H:00')
-    out = {'generated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ'), 'days': days, 'il_adlari': [p[0] for p in PROV], 'models': {}, 'il': {}}
+    out = {'generated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ'), 'days': days, 'il_adlari': [p[0] for p in PROV], 'models': {}, 'il': {}, 'yagis': {}}
     old = {}
     if os.path.exists(OUT):
         try:
@@ -61,22 +64,23 @@ def main():
             time.sleep(70)
         try:
             q = urllib.parse.urlencode({'latitude': ','.join(str(p[1]) for p in PROV), 'longitude': ','.join(str(p[2]) for p in PROV),
-                                        'hourly': 'snowfall', 'models': mid, 'forecast_days': DAYS + 1, 'timezone': 'Europe/Istanbul'})
+                                        'hourly': 'snowfall,precipitation', 'models': mid, 'forecast_days': DAYS + 1, 'timezone': 'Europe/Istanbul'})
             d = get(f'{API}?{q}')
-            per_il = []
+            per = {'snowfall': [], 'precipitation': []}   # kar cm, yağış mm
             for loc in d:
                 h = loc['hourly']
-                keys = [k for k in h if k.startswith('snowfall')]
-                mem = []
-                for k in keys:
-                    s = {}
-                    for t, v in zip(h['time'], h[k]):
-                        if v is None or t < hour0 or t[:10] not in days:
-                            continue
-                        s[t[:10]] = s.get(t[:10], 0) + v
-                    if s:
-                        mem.append([round(s.get(day, 0) * 10) for day in days])
-                per_il.append(mem)
+                for var, rows in per.items():
+                    mem = []
+                    for k in [k for k in h if k == var or k.startswith(f'{var}_member')]:
+                        s = {}
+                        for t, v in zip(h['time'], h[k]):
+                            if v is None or t < hour0 or t[:10] not in days:
+                                continue
+                            s[t[:10]] = s.get(t[:10], 0) + v
+                        if s:
+                            mem.append([round(s.get(day, 0) * 10) for day in days])
+                    rows.append(mem)
+            per_il = per['snowfall']
             if not any(per_il):
                 raise ValueError('boş yanıt')
             run = None
@@ -86,11 +90,15 @@ def main():
                 pass
             out['models'][key] = {'name': name, 'members': max(len(m) for m in per_il), 'run': run}
             out['il'][key] = per_il
+            if any(per['precipitation']):
+                out['yagis'][key] = per['precipitation']
             log(name, len(per_il), 'il', out['models'][key]['members'], 'senaryo')
         except Exception as e:  # noqa: BLE001 — alınamayan modelin eski verisi (aynı günlerse) korunur
             log(name, 'alınamadı', repr(e))
             if old.get('il', {}).get(key) and old.get('days') == days:
                 out['models'][key], out['il'][key] = old['models'][key], old['il'][key]
+                if old.get('yagis', {}).get(key):
+                    out['yagis'][key] = old['yagis'][key]
     if not out['il']:
         log('hiç model yok, yazılmadı')
         return
