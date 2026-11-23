@@ -132,8 +132,11 @@ def model(key, product, kinds, name):
 def main():
     path = os.path.join(OUT, 'senaryo.json')
     if os.path.exists(path) and time.time() - os.path.getmtime(path) < 3 * 3600:
-        log('güncel')
-        return
+        with open(path, encoding='utf-8') as fh:
+            ms = json.load(fh).get('models', {})
+        if ms and all('yagis' in m.get('fields', []) for m in ms.values()):   # yağışsız eski dosya beklemeden yenilenir
+            log('güncel')
+            return
     os.makedirs(OUT, exist_ok=True)
     meta = {'generated': dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ'), 'box': {**BOX, 'nx': NX, 'ny': NY}, 'steps': STEPS,
             'encoding': 'uint8 q = sqrt(cm) * 12; [senaryo][pencere][enlem kuzeyden][boylam batıdan]', 'models': {}}
